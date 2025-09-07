@@ -1,0 +1,275 @@
+{
+	"info": {
+		"_postman_id": "ecommerce-mcp-server",
+		"name": "E-commerce MCP Server",
+		"description": "API collection for testing the E-commerce MCP Server prototype",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Health Check",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{base_url}}/health",
+					"host": ["{{base_url}}"],
+					"path": ["health"]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "System Info",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{base_url}}/health/system",
+					"host": ["{{base_url}}"],
+					"path": ["health", "system"]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Sales Query - Last Month",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"query\": \"What were our total sales last month?\",\n  \"context\": {\n    \"user_id\": \"user_123\",\n    \"shop_id\": \"shop_456\"\n  },\n  \"options\": {\n    \"include_structured_data\": true,\n    \"max_results\": 50\n  }\n}"
+				},
+				"url": {
+					"raw": "{{base_url}}/query",
+					"host": ["{{base_url}}"],
+					"path": ["query"]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Sales Query - Red Shirts",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"query\": \"How many red shirts did we sell last week?\",\n  \"context\": {\n    \"user_id\": \"user_123\",\n    \"shop_id\": \"shop_456\"\n  }\n}"
+				},
+				"url": {
+					"raw": "{{base_url}}/query",
+					"host": ["{{base_url}}"],
+					"path": ["query"]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Inventory Query - Low Stock",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"query\": \"Which products are running low on stock?\",\n  \"context\": {\n    \"user_id\": \"user_123\",\n    \"shop_id\": \"shop_456\"\n  }\n}"
+				},
+				"url": {
+					"raw": "{{base_url}}/query",
+					"host": ["{{base_url}}"],
+					"path": ["query"]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Customer Query - Top Customers",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"query\": \"Who are my top 5 customers by total spending?\",\n  \"context\": {\n    \"user_id\": \"user_123\",\n    \"shop_id\": \"shop_456\"\n  }\n}"
+				},
+				"url": {
+					"raw": "{{base_url}}/query",
+					"host": ["{{base_url}}"],
+					"path": ["query"]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Order Query - Pending Orders",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"query\": \"How many pending orders do I have?\",\n  \"context\": {\n    \"user_id\": \"user_123\",\n    \"shop_id\": \"shop_456\"\n  }\n}"
+				},
+				"url": {
+					"raw": "{{base_url}}/query",
+					"host": ["{{base_url}}"],
+					"path": ["query"]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Analytics Query - Electronics Performance",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"query\": \"Analyze the performance of electronics products this quarter\",\n  \"context\": {\n    \"user_id\": \"user_123\",\n    \"shop_id\": \"shop_456\"\n  }\n}"
+				},
+				"url": {
+					"raw": "{{base_url}}/query",
+					"host": ["{{base_url}}"],
+					"path": ["query"]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Models Status",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{base_url}}/models/status",
+					"host": ["{{base_url}}"],
+					"path": ["models", "status"]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Load Model",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"url": {
+					"raw": "{{base_url}}/models/load/llama3-7b",
+					"host": ["{{base_url}}"],
+					"path": ["models", "load", "llama3-7b"]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Unload Model",
+			"request": {
+				"method": "DELETE",
+				"header": [],
+				"url": {
+					"raw": "{{base_url}}/models/unload/llama3-7b",
+					"host": ["{{base_url}}"],
+					"path": ["models", "unload", "llama3-7b"]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "List Tools",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{base_url}}/tools/list",
+					"host": ["{{base_url}}"],
+					"path": ["tools", "list"]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Execute Tool",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"tool_name\": \"get_sales_data\",\n  \"parameters\": {\n    \"category\": \"Electronics\",\n    \"start_date\": \"2024-01-01\",\n    \"end_date\": \"2024-01-31\"\n  }\n}"
+				},
+				"url": {
+					"raw": "{{base_url}}/tools/execute?tool_name=get_sales_data",
+					"host": ["{{base_url}}"],
+					"path": ["tools", "execute"],
+					"query": [
+						{
+							"key": "tool_name",
+							"value": "get_sales_data"
+						}
+					]
+				}
+			},
+			"response": []
+		}
+	],
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					""
+				]
+			}
+		},
+		{
+			"listen": "test",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					""
+				]
+			}
+		}
+	],
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://127.0.0.1:8000",
+			"type": "string"
+		}
+	]
+}

@@ -31,6 +31,12 @@ class StructuredData(BaseModel):
     results: Optional[List[Dict[str, Any]]] = None
 
 
+class TokenUsage(BaseModel):
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+
+
 class QueryMetadata(BaseModel):
     model_config = {"protected_namespaces": ()}
     
@@ -40,6 +46,7 @@ class QueryMetadata(BaseModel):
     confidence_score: float = 0.0
     query_intent: Optional[str] = None
     extracted_entities: Optional[List[str]] = None
+    token_usage: Optional[TokenUsage] = None
 
 
 class QueryResponse(BaseModel):

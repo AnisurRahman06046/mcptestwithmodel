@@ -13,6 +13,7 @@ class QueryProcessor:
     """Processes natural language queries and executes appropriate tools"""
     
     def __init__(self):
+        self._token_usage = None  # Track token usage for current query
         self.intent_patterns = {
             "sales_inquiry": [
                 r"sales?|sold|revenue|earnings?|income",
@@ -94,17 +95,23 @@ class QueryProcessor:
             
             execution_time = (datetime.utcnow() - start_time).total_seconds() * 1000
             
+            # Include token usage in metadata if available
+            metadata = {
+                "intent": intent,
+                "entities": entities,
+                "tools_called": [tc["tool"] for tc in tool_calls],
+                "execution_time_ms": int(execution_time),
+                "confidence_score": self._calculate_confidence(intent, entities, tool_results)
+            }
+            
+            if self._token_usage:
+                metadata["token_usage"] = self._token_usage
+            
             return {
                 "success": True,
                 "response": response_text,
                 "structured_data": structured_data,
-                "metadata": {
-                    "intent": intent,
-                    "entities": entities,
-                    "tools_called": [tc["tool"] for tc in tool_calls],
-                    "execution_time_ms": int(execution_time),
-                    "confidence_score": self._calculate_confidence(intent, entities, tool_results)
-                },
+                "metadata": metadata,
                 "debug": {
                     "tool_calls": tool_calls,
                     "tool_results": tool_results
@@ -289,16 +296,21 @@ class QueryProcessor:
         try:
             logger.info(f"Starting model inference with active model: {model_manager.active_model}")
             # Use model manager for generation with shorter max_tokens to reduce inference time
-            response = model_manager.inference(prompt, max_tokens=100, temperature=0.3)
+            result = model_manager.inference(prompt, max_tokens=100, temperature=0.3)
             logger.info("Model inference completed successfully")
             
-            # Clean up the response
-            response = self._clean_model_response(response)
+            # Clean up the response text
+            response_text = self._clean_model_response(result["text"])
             
-            return response
+            # Store token usage for metadata
+            self._token_usage = result["token_usage"]
+            
+            return response_text
             
         except Exception as e:
             logger.error(f"Model generation error: {e}")
+            # Reset token usage on error
+            self._token_usage = None
             return self._generate_template_response(intent, tool_results)
     
     def _create_model_prompt(

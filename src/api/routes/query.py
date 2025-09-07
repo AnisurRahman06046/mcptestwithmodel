@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
-from src.models.api import QueryRequest, QueryResponse, QueryMetadata, StructuredData
+from src.models.api import QueryRequest, QueryResponse, QueryMetadata, StructuredData, TokenUsage
 from src.database import get_db
 from src.services.query_processor import query_processor
 import logging
@@ -24,13 +24,24 @@ async def process_query(request: QueryRequest, db: Session = Depends(get_db)):
         
         # Convert the result to the API response format
         if result["success"]:
+            # Handle token usage if present
+            token_usage = None
+            if result["metadata"].get("token_usage"):
+                token_usage_data = result["metadata"]["token_usage"]
+                token_usage = TokenUsage(
+                    prompt_tokens=token_usage_data["prompt_tokens"],
+                    completion_tokens=token_usage_data["completion_tokens"],
+                    total_tokens=token_usage_data["total_tokens"]
+                )
+            
             metadata = QueryMetadata(
-                model_used=result["metadata"].get("model_used", "llama3-7b"),
+                model_used=result["metadata"].get("model_used", "phi-3-mini"),
                 execution_time_ms=result["metadata"]["execution_time_ms"],
                 tools_called=result["metadata"]["tools_called"],
                 confidence_score=result["metadata"]["confidence_score"],
                 query_intent=result["metadata"].get("intent"),
-                extracted_entities=list(result["metadata"].get("entities", {}).keys())
+                extracted_entities=list(result["metadata"].get("entities", {}).keys()),
+                token_usage=token_usage
             )
             
             # Convert structured data

@@ -10,8 +10,15 @@ class Settings(BaseSettings):
     DEBUG: bool = True
     LOG_LEVEL: str = "INFO"
     
-    # Database Configuration
-    DATABASE_URL: str = "sqlite:///./data/database/ecommerce.db"
+    # MongoDB Configuration
+    ATLAS_URI: str = "mongodb+srv://anisurrahman14046_db_user:teAl7rZGMGq12JkX@ppnur.9knhsjp.mongodb.net"
+    DB_NAME: str = "ppnur"
+    MONGODB_MIN_POOL_SIZE: int = 1
+    MONGODB_MAX_POOL_SIZE: int = 5  # Reduced for development
+    MONGODB_MAX_IDLE_TIME_MS: int = 60000  # Increased idle time
+    MONGODB_SERVER_SELECTION_TIMEOUT_MS: int = 10000  # Increased timeout
+    MONGODB_CONNECT_TIMEOUT_MS: int = 10000
+    MONGODB_SOCKET_TIMEOUT_MS: int = 30000
     
     # Model Configuration
     MODEL_PATH: str = "./data/models"
@@ -45,6 +52,5 @@ class Settings(BaseSettings):
 settings = Settings()
 
 # Ensure data directories exist
-os.makedirs("data/database", exist_ok=True)
 os.makedirs("data/models", exist_ok=True)
 os.makedirs("logs", exist_ok=True)

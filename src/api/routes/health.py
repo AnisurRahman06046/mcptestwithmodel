@@ -1,7 +1,6 @@
-from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
+from fastapi import APIRouter
 from src.models.api import HealthCheck
-from src.database import get_db
+from src.database.manager import database_manager
 from src.services.real_model_manager import real_model_manager as model_manager
 from src.config import settings
 import time
@@ -15,12 +14,12 @@ start_time = time.time()
 
 
 @router.get("/", response_model=HealthCheck)
-async def health_check(db: Session = Depends(get_db)):
+async def health_check():
     """Health check endpoint"""
     try:
         # Test database connection
-        db.execute("SELECT 1")
-        database_connected = True
+        health_status = await database_manager.health_check()
+        database_connected = health_status.get("status") == "healthy"
     except Exception:
         database_connected = False
     

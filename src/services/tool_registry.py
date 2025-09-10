@@ -1,16 +1,18 @@
+"""
+MongoDB-based tool registry for e-commerce data access.
+Clean implementation using MongoDB collections and aggregation pipelines.
+"""
+
 from typing import Dict, Any, Optional, List, Callable
 from datetime import datetime, timedelta
-from sqlalchemy.orm import Session
-from sqlalchemy import and_, func, desc
-from src.models.database import Product, Customer, Order, OrderItem, Inventory
-from src.database.connection import get_db_context
+from src.database.mongodb import mongodb_client
 import logging
 
 logger = logging.getLogger(__name__)
 
 
-class ToolRegistry:
-    """Registry for e-commerce data access tools"""
+class MongoDBToolRegistry:
+    """Registry for e-commerce data access tools using MongoDB"""
     
     def __init__(self):
         self.tools: Dict[str, Callable] = {
@@ -22,22 +24,26 @@ class ToolRegistry:
             "get_revenue_report": self.get_revenue_report
         }
     
-    def execute_tool(self, tool_name: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
+    async def execute_tool(self, tool_name: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a tool with given parameters"""
         if tool_name not in self.tools:
             raise ValueError(f"Unknown tool: {tool_name}")
         
         try:
-            with get_db_context() as db:
-                result = self.tools[tool_name](db, **parameters)
-                return {
-                    "success": True,
-                    "tool": tool_name,
-                    "result": result,
-                    "parameters": parameters
-                }
+            if not mongodb_client.is_connected:
+                await mongodb_client.connect()
+            
+            db = mongodb_client.database
+            result = await self.tools[tool_name](db, **parameters)
+            
+            return {
+                "success": True,
+                "tool": tool_name,
+                "result": result,
+                "parameters": parameters
+            }
         except Exception as e:
-            logger.error(f"Tool execution error ({tool_name}): {e}")
+            logger.error(f"Tool execution error ({tool_name}): {e}", exc_info=True)
             return {
                 "success": False,
                 "tool": tool_name,
@@ -45,468 +51,460 @@ class ToolRegistry:
                 "parameters": parameters
             }
     
-    def get_sales_data(
+    async def get_sales_data(
         self, 
-        db: Session,
-        product: Optional[str] = None,
-        category: Optional[str] = None,
+        db, 
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
-        group_by: str = "day"
+        product: Optional[str] = None,
+        category: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Retrieve sales data with flexible filtering"""
+        """Get sales data with optional filtering"""
         
-        query = db.query(
-            OrderItem.quantity,
-            OrderItem.unit_price,
-            OrderItem.discount,
-            Order.order_date,
-            Product.name.label('product_name'),
-            Product.category
-        ).join(Order).join(Product).filter(Order.status == "fulfilled")
+        # Build match pipeline
+        match_conditions = {}
         
-        # Apply filters
-        if product:
-            query = query.filter(Product.name.ilike(f"%{product}%"))
-        if category:
-            query = query.filter(Product.category.ilike(f"%{category}%"))
-        if start_date:
-            start_dt = datetime.fromisoformat(start_date)
-            query = query.filter(Order.order_date >= start_dt)
-        if end_date:
-            end_dt = datetime.fromisoformat(end_date)
-            query = query.filter(Order.order_date <= end_dt)
+        # Date filtering
+        if start_date or end_date:
+            date_filter = {}
+            if start_date:
+                date_filter["$gte"] = datetime.fromisoformat(start_date)
+            if end_date:
+                date_filter["$lte"] = datetime.fromisoformat(end_date)
+            match_conditions["order_date"] = date_filter
         
-        results = query.all()
+        # Only include completed orders
+        match_conditions["status"] = {"$in": ["completed", "fulfilled", "shipped"]}
         
-        if not results:
+        # Aggregation pipeline for sales data
+        pipeline = [
+            {"$match": match_conditions},
+            {
+                "$group": {
+                    "_id": None,
+                    "total_orders": {"$sum": 1},
+                    "total_revenue": {"$sum": "$total_amount"},
+                    "total_items": {"$sum": {"$size": "$items"}},
+                    "average_order_value": {"$avg": "$total_amount"}
+                }
+            }
+        ]
+        
+        # Execute aggregation
+        result = await db.orders.aggregate(pipeline).to_list(length=1)
+        
+        if not result:
             return {
-                "total_quantity": 0,
+                "total_orders": 0,
                 "total_revenue": 0.0,
+                "total_quantity": 0,
                 "average_order_value": 0.0,
-                "breakdown": [],
-                "message": "No sales data found for the specified criteria"
+                "breakdown": []
             }
         
-        # Calculate totals
-        total_quantity = sum(r.quantity for r in results)
-        total_revenue = sum((r.quantity * r.unit_price) - r.discount for r in results)
+        data = result[0]
         
-        # Group by period
-        breakdown = self._group_sales_by_period(results, group_by)
+        # Get breakdown by product/category if specified
+        breakdown = []
+        if product or category:
+            breakdown = await self._get_sales_breakdown(db, match_conditions, product, category)
         
         return {
-            "total_quantity": total_quantity,
-            "total_revenue": round(total_revenue, 2),
-            "average_order_value": round(total_revenue / len(results), 2) if results else 0,
-            "period_count": len(breakdown),
+            "total_orders": data.get("total_orders", 0),
+            "total_revenue": round(data.get("total_revenue", 0.0), 2),
+            "total_quantity": data.get("total_items", 0),
+            "average_order_value": round(data.get("average_order_value", 0.0), 2),
             "breakdown": breakdown
         }
     
-    def get_inventory_status(
-        self,
-        db: Session,
-        product: Optional[str] = None,
-        category: Optional[str] = None,
-        low_stock_threshold: int = 10
-    ) -> Dict[str, Any]:
-        """Check inventory status with low stock alerts"""
-        
-        query = db.query(Inventory, Product).join(Product)
+    async def _get_sales_breakdown(self, db, match_conditions: dict, product: str = None, category: str = None):
+        """Get sales breakdown by product or category"""
+        pipeline = [
+            {"$match": match_conditions},
+            {"$unwind": "$items"},
+        ]
         
         if product:
-            query = query.filter(Product.name.ilike(f"%{product}%"))
+            pipeline.append({"$match": {"items.product_name": {"$regex": product, "$options": "i"}}})
+        
         if category:
-            query = query.filter(Product.category.ilike(f"%{category}%"))
+            # We'll need to join with products collection to get category
+            pipeline.extend([
+                {
+                    "$lookup": {
+                        "from": "products",
+                        "localField": "items.product_id", 
+                        "foreignField": "_id",
+                        "as": "product_info"
+                    }
+                },
+                {"$match": {"product_info.category": {"$regex": category, "$options": "i"}}}
+            ])
         
-        results = query.all()
+        pipeline.extend([
+            {
+                "$group": {
+                    "_id": "$items.product_name",
+                    "quantity": {"$sum": "$items.quantity"},
+                    "revenue": {"$sum": "$items.total_price"}
+                }
+            },
+            {"$sort": {"revenue": -1}},
+            {"$limit": 10}
+        ])
         
-        inventory_data = []
+        # Execute aggregation and get results
+        breakdown_result = await db.orders.aggregate(pipeline).to_list(length=10)
+        
+        breakdown = []
+        for doc in breakdown_result:
+            breakdown.append({
+                "product": doc["_id"],
+                "quantity": doc["quantity"],
+                "revenue": round(doc["revenue"], 2)
+            })
+        
+        return breakdown
+    
+    async def get_inventory_status(
+        self,
+        db,
+        product: Optional[str] = None,
+        category: Optional[str] = None,
+        low_stock_threshold: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """Get inventory status with optional filtering"""
+        
+        # Build match conditions
+        match_conditions = {}
+        
+        if product:
+            match_conditions["product_name"] = {"$regex": product, "$options": "i"}
+        
+        if low_stock_threshold is None:
+            low_stock_threshold = 10
+        
+        # Get low stock items
+        low_stock_pipeline = [
+            {"$match": {**match_conditions, "available_quantity": {"$lte": low_stock_threshold}}},
+            {"$sort": {"available_quantity": 1}},
+            {"$limit": 20}
+        ]
+        
+        # Execute low stock aggregation
+        low_stock_result = await db.inventory.aggregate(low_stock_pipeline).to_list(length=20)
+        
         low_stock_items = []
-        out_of_stock_items = []
-        total_value = 0
+        for doc in low_stock_result:
+            low_stock_items.append({
+                "product_name": doc["product_name"],
+                "sku": doc["product_sku"],
+                "current_stock": doc["available_quantity"],
+                "reorder_level": doc["reorder_level"]
+            })
         
-        for inv, prod in results:
-            item_value = inv.quantity * (inv.cost_per_unit or prod.price * 0.6)
-            total_value += item_value
-            
-            item_data = {
-                "product": prod.name,
-                "category": prod.category,
-                "current_stock": inv.quantity,
-                "reserved": inv.reserved_quantity,
-                "available": inv.quantity - inv.reserved_quantity,
-                "reorder_level": inv.reorder_level,
-                "max_stock": inv.max_stock_level,
-                "value": round(item_value, 2),
-                "supplier": inv.supplier
+        # Get summary statistics
+        summary_pipeline = [
+            {"$match": match_conditions},
+            {
+                "$group": {
+                    "_id": None,
+                    "total_products": {"$sum": 1},
+                    "low_stock_count": {
+                        "$sum": {"$cond": [{"$lte": ["$available_quantity", low_stock_threshold]}, 1, 0]}
+                    },
+                    "out_of_stock_count": {
+                        "$sum": {"$cond": [{"$eq": ["$available_quantity", 0]}, 1, 0]}
+                    },
+                    "total_inventory_value": {"$sum": {"$multiply": ["$available_quantity", "$cost_per_unit"]}}
+                }
             }
-            
-            if inv.quantity == 0:
-                item_data["status"] = "out_of_stock"
-                out_of_stock_items.append(item_data)
-            elif inv.quantity <= low_stock_threshold:
-                item_data["status"] = "low_stock"
-                low_stock_items.append(item_data)
-            else:
-                item_data["status"] = "in_stock"
-            
-            inventory_data.append(item_data)
+        ]
+        
+        summary_result = await db.inventory.aggregate(summary_pipeline).to_list(length=1)
+        summary = summary_result[0] if summary_result else {}
         
         return {
-            "total_products": len(inventory_data),
-            "total_value": round(total_value, 2),
-            "low_stock_count": len(low_stock_items),
-            "out_of_stock_count": len(out_of_stock_items),
-            "low_stock_items": low_stock_items,
-            "out_of_stock_items": out_of_stock_items,
-            "all_inventory": inventory_data[:20]  # Limit for response size
+            "total_products": summary.get("total_products", 0),
+            "low_stock_count": summary.get("low_stock_count", 0),
+            "out_of_stock_count": summary.get("out_of_stock_count", 0),
+            "total_inventory_value": round(summary.get("total_inventory_value", 0.0), 2),
+            "low_stock_items": low_stock_items
         }
     
-    def get_customer_info(
+    async def get_customer_info(
         self,
-        db: Session,
+        db,
         customer_id: Optional[str] = None,
-        email: Optional[str] = None,
-        include_orders: bool = True
+        include_orders: bool = True,
+        limit: int = 10
     ) -> Dict[str, Any]:
-        """Retrieve customer information and analytics"""
-        
-        query = db.query(Customer)
+        """Get customer information with optional order details"""
         
         if customer_id:
-            query = query.filter(Customer.id == int(customer_id))
-        elif email:
-            query = query.filter(Customer.email.ilike(f"%{email}%"))
+            # Get specific customer
+            customer = await db.customers.find_one({"customer_id": customer_id})
+            if not customer:
+                return {"error": "Customer not found"}
+            
+            customers_list = [customer]
         else:
-            # Return top customers by total spent
-            query = query.order_by(desc(Customer.total_spent)).limit(10)
+            # Get top customers by total spent
+            pipeline = [
+                {"$sort": {"total_spent": -1}},
+                {"$limit": limit}
+            ]
+            
+            customers_list = await db.customers.aggregate(pipeline).to_list(length=limit)
         
-        customers = query.all()
-        
-        if not customers:
-            return {"message": "No customers found matching criteria"}
-        
-        customer_data = []
-        for customer in customers:
-            data = {
-                "id": customer.id,
-                "name": customer.name,
-                "email": customer.email,
-                "phone": customer.phone,
-                "city": customer.city,
-                "country": customer.country,
-                "total_orders": customer.total_orders,
-                "total_spent": customer.total_spent,
-                "loyalty_tier": customer.loyalty_tier,
-                "member_since": customer.created_at.isoformat() if customer.created_at else None,
-                "last_purchase": customer.last_purchase_date.isoformat() if customer.last_purchase_date else None
+        # Format customer data
+        customers = []
+        for customer in customers_list:
+            customer_data = {
+                "customer_id": customer["customer_id"],
+                "name": customer["name"],
+                "email": customer["email"],
+                "total_orders": customer["total_orders"],
+                "total_spent": customer["total_spent"],
+                "loyalty_tier": customer["loyalty_tier"],
+                "last_purchase_date": customer.get("last_purchase_date")
             }
             
-            if include_orders:
-                recent_orders = db.query(Order).filter(
-                    Order.customer_id == customer.id
-                ).order_by(desc(Order.order_date)).limit(5).all()
-                
-                data["recent_orders"] = [
-                    {
-                        "id": order.id,
-                        "date": order.order_date.isoformat(),
-                        "total": order.total_amount,
-                        "status": order.status,
-                        "items_count": len(order.order_items)
-                    }
-                    for order in recent_orders
-                ]
+            if include_orders and customer_id:
+                # Get recent orders for specific customer
+                recent_orders = []
+                cursor = db.orders.find(
+                    {"customer_id": customer["customer_id"]},
+                    sort=[("order_date", -1)],
+                    limit=5
+                )
+                async for order in cursor:
+                    recent_orders.append({
+                        "order_id": order["order_id"],
+                        "order_date": order["order_date"],
+                        "total_amount": order["total_amount"],
+                        "status": order["status"]
+                    })
+                customer_data["recent_orders"] = recent_orders
             
-            customer_data.append(data)
+            customers.append(customer_data)
         
         return {
-            "customers": customer_data,
-            "count": len(customer_data)
+            "customers": customers,
+            "total_customers": len(customers)
         }
     
-    def get_order_details(
+    async def get_order_details(
         self,
-        db: Session,
+        db,
         order_id: Optional[str] = None,
         customer_id: Optional[str] = None,
         status: Optional[str] = None,
         start_date: Optional[str] = None,
-        end_date: Optional[str] = None
+        end_date: Optional[str] = None,
+        limit: int = 20
     ) -> Dict[str, Any]:
-        """Retrieve order information with filtering"""
+        """Get order details with filtering"""
         
-        query = db.query(Order).join(Customer)
+        # Build match conditions
+        match_conditions = {}
         
         if order_id:
-            query = query.filter(Order.id == int(order_id))
+            match_conditions["order_id"] = order_id
+        
         if customer_id:
-            query = query.filter(Order.customer_id == int(customer_id))
+            match_conditions["customer_id"] = customer_id
+        
         if status:
-            query = query.filter(Order.status == status)
-        if start_date:
-            start_dt = datetime.fromisoformat(start_date)
-            query = query.filter(Order.order_date >= start_dt)
-        if end_date:
-            end_dt = datetime.fromisoformat(end_date)
-            query = query.filter(Order.order_date <= end_dt)
+            match_conditions["status"] = status
         
-        orders = query.order_by(desc(Order.order_date)).limit(50).all()
+        if start_date or end_date:
+            date_filter = {}
+            if start_date:
+                date_filter["$gte"] = datetime.fromisoformat(start_date)
+            if end_date:
+                date_filter["$lte"] = datetime.fromisoformat(end_date)
+            match_conditions["order_date"] = date_filter
         
-        if not orders:
-            return {"message": "No orders found matching criteria"}
+        # Get orders
+        cursor = db.orders.find(
+            match_conditions,
+            sort=[("order_date", -1)],
+            limit=limit
+        )
         
-        order_data = []
+        orders = []
         total_value = 0
-        status_summary = {}
         
-        for order in orders:
-            # Get order items
-            items = []
-            for item in order.order_items:
-                items.append({
-                    "product": item.product.name,
-                    "quantity": item.quantity,
-                    "unit_price": item.unit_price,
-                    "discount": item.discount,
-                    "subtotal": (item.quantity * item.unit_price) - item.discount
-                })
-            
-            order_info = {
-                "id": order.id,
-                "customer_name": order.customer.name,
-                "customer_email": order.customer.email,
-                "order_date": order.order_date.isoformat(),
-                "status": order.status,
-                "total_amount": order.total_amount,
-                "payment_method": order.payment_method,
-                "shipping_cost": order.shipping_cost,
-                "discount": order.discount_applied,
-                "items": items,
-                "items_count": len(items)
+        async for order in cursor:
+            order_data = {
+                "order_id": order["order_id"],
+                "customer_name": order["customer_name"],
+                "customer_email": order["customer_email"],
+                "order_date": order["order_date"],
+                "status": order["status"],
+                "total_amount": order["total_amount"],
+                "items_count": len(order.get("items", [])),
+                "payment_method": order.get("payment_method"),
+                "shipping_cost": order.get("shipping_cost", 0)
             }
-            
-            if order.fulfilled_date:
-                order_info["fulfilled_date"] = order.fulfilled_date.isoformat()
-            
-            order_data.append(order_info)
-            total_value += order.total_amount
-            
-            # Update status summary
-            status_summary[order.status] = status_summary.get(order.status, 0) + 1
+            orders.append(order_data)
+            total_value += order["total_amount"]
         
         return {
-            "orders": order_data,
+            "orders": orders,
             "summary": {
-                "total_orders": len(order_data),
+                "total_orders": len(orders),
                 "total_value": round(total_value, 2),
-                "average_order_value": round(total_value / len(order_data), 2) if order_data else 0,
-                "status_breakdown": status_summary
+                "average_order_value": round(total_value / len(orders) if orders else 0, 2)
             }
         }
     
-    def get_product_analytics(
+    async def get_product_analytics(
         self,
-        db: Session,
+        db,
         product: Optional[str] = None,
         category: Optional[str] = None,
-        metric: str = "sales",
-        period: str = "month"
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Generate product performance analytics"""
+        """Get product performance analytics"""
         
-        # Get time period
-        end_date = datetime.now()
-        if period == "week":
-            start_date = end_date - timedelta(weeks=1)
-        elif period == "month":
-            start_date = end_date - timedelta(days=30)
-        elif period == "quarter":
-            start_date = end_date - timedelta(days=90)
-        else:  # year
-            start_date = end_date - timedelta(days=365)
+        # Build match conditions for orders
+        match_conditions = {}
         
-        # Base query for product performance
-        query = db.query(
-            Product.name,
-            Product.category,
-            Product.price,
-            func.sum(OrderItem.quantity).label('total_sold'),
-            func.sum((OrderItem.quantity * OrderItem.unit_price) - OrderItem.discount).label('revenue'),
-            func.count(OrderItem.id).label('order_count')
-        ).join(OrderItem).join(Order).filter(
-            and_(
-                Order.status == "fulfilled",
-                Order.order_date >= start_date,
-                Order.order_date <= end_date
-            )
-        )
+        if start_date or end_date:
+            date_filter = {}
+            if start_date:
+                date_filter["$gte"] = datetime.fromisoformat(start_date)
+            if end_date:
+                date_filter["$lte"] = datetime.fromisoformat(end_date)
+            match_conditions["order_date"] = date_filter
+        
+        match_conditions["status"] = {"$in": ["completed", "fulfilled", "shipped"]}
+        
+        # Aggregation pipeline for product analytics
+        pipeline = [
+            {"$match": match_conditions},
+            {"$unwind": "$items"}
+        ]
         
         if product:
-            query = query.filter(Product.name.ilike(f"%{product}%"))
-        if category:
-            query = query.filter(Product.category.ilike(f"%{category}%"))
+            pipeline.append({"$match": {"items.product_name": {"$regex": product, "$options": "i"}}})
         
-        query = query.group_by(Product.id).order_by(desc('revenue'))
+        pipeline.extend([
+            {
+                "$group": {
+                    "_id": {
+                        "product_id": "$items.product_id",
+                        "product_name": "$items.product_name",
+                        "product_sku": "$items.product_sku"
+                    },
+                    "total_sold": {"$sum": "$items.quantity"},
+                    "total_revenue": {"$sum": "$items.total_price"},
+                    "avg_price": {"$avg": "$items.unit_price"},
+                    "order_count": {"$sum": 1}
+                }
+            },
+            {"$sort": {"total_revenue": -1}},
+            {"$limit": 20}
+        ])
         
-        results = query.all()
+        # Execute aggregation and get results
+        aggregation_result = await db.orders.aggregate(pipeline).to_list(length=20)
         
-        analytics = []
-        for result in results:
-            analytics.append({
-                "product": result.name,
-                "category": result.category,
-                "price": result.price,
-                "units_sold": result.total_sold,
-                "revenue": round(result.revenue, 2),
-                "orders": result.order_count,
-                "avg_quantity_per_order": round(result.total_sold / result.order_count, 2) if result.order_count else 0
+        products = []
+        for doc in aggregation_result:
+            products.append({
+                "product_name": doc["_id"]["product_name"],
+                "sku": doc["_id"]["product_sku"],
+                "total_sold": doc["total_sold"],
+                "total_revenue": round(doc["total_revenue"], 2),
+                "average_price": round(doc["avg_price"], 2),
+                "order_count": doc["order_count"]
             })
         
         return {
-            "period": f"{period} ({start_date.date()} to {end_date.date()})",
-            "products": analytics[:20],  # Top 20 products
-            "total_products_analyzed": len(analytics)
+            "products": products,
+            "total_products_analyzed": len(products)
         }
     
-    def get_revenue_report(
+    async def get_revenue_report(
         self,
-        db: Session,
+        db,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
-        group_by: str = "category",
-        include_trends: bool = True
+        group_by: str = "day"
     ) -> Dict[str, Any]:
-        """Generate comprehensive revenue analysis"""
+        """Get revenue report grouped by time period"""
         
-        # Set default date range if not provided
-        if not end_date:
-            end_date = datetime.now()
-        else:
-            end_date = datetime.fromisoformat(end_date)
+        # Build match conditions
+        match_conditions = {"status": {"$in": ["completed", "fulfilled", "shipped"]}}
         
-        if not start_date:
-            start_date = end_date - timedelta(days=30)
-        else:
-            start_date = datetime.fromisoformat(start_date)
+        if start_date or end_date:
+            date_filter = {}
+            if start_date:
+                date_filter["$gte"] = datetime.fromisoformat(start_date)
+            if end_date:
+                date_filter["$lte"] = datetime.fromisoformat(end_date)
+            match_conditions["order_date"] = date_filter
         
-        # Revenue by grouping
-        if group_by == "category":
-            group_field = Product.category
-        elif group_by == "product":
-            group_field = Product.name
-        else:  # customer
-            group_field = Customer.name
+        # Group by time period
+        group_by_format = {
+            "day": {
+                "year": {"$year": "$order_date"},
+                "month": {"$month": "$order_date"},
+                "day": {"$dayOfMonth": "$order_date"}
+            },
+            "week": {
+                "year": {"$year": "$order_date"},
+                "week": {"$week": "$order_date"}
+            },
+            "month": {
+                "year": {"$year": "$order_date"},
+                "month": {"$month": "$order_date"}
+            }
+        }
         
-        query = db.query(
-            group_field.label('group_name'),
-            func.sum((OrderItem.quantity * OrderItem.unit_price) - OrderItem.discount).label('revenue'),
-            func.sum(OrderItem.quantity).label('units'),
-            func.count(func.distinct(Order.id)).label('orders')
-        ).join(Order).join(Product)
+        pipeline = [
+            {"$match": match_conditions},
+            {
+                "$group": {
+                    "_id": group_by_format.get(group_by, group_by_format["day"]),
+                    "revenue": {"$sum": "$total_amount"},
+                    "orders": {"$sum": 1},
+                    "avg_order_value": {"$avg": "$total_amount"}
+                }
+            },
+            {"$sort": {"_id": 1}},
+            {"$limit": 50}
+        ]
         
-        if group_by == "customer":
-            query = query.join(Customer)
-        
-        query = query.filter(
-            and_(
-                Order.status == "fulfilled",
-                Order.order_date >= start_date,
-                Order.order_date <= end_date
-            )
-        ).group_by(group_field).order_by(desc('revenue'))
-        
-        results = query.all()
+        # Execute revenue aggregation
+        revenue_result = await db.orders.aggregate(pipeline).to_list(length=50)
         
         revenue_data = []
         total_revenue = 0
-        total_units = 0
         
-        for result in results:
-            revenue_data.append({
-                group_by: result.group_name,
-                "revenue": round(result.revenue, 2),
-                "units_sold": result.units,
-                "orders": result.orders,
-                "avg_order_value": round(result.revenue / result.orders, 2) if result.orders else 0
-            })
-            total_revenue += result.revenue
-            total_units += result.units
+        for doc in revenue_result:
+            period_data = {
+                "period": doc["_id"],
+                "revenue": round(doc["revenue"], 2),
+                "orders": doc["orders"],
+                "avg_order_value": round(doc["avg_order_value"], 2)
+            }
+            revenue_data.append(period_data)
+            total_revenue += doc["revenue"]
         
-        # Add percentage of total
-        for item in revenue_data:
-            item["percentage_of_total"] = round((item["revenue"] / total_revenue) * 100, 1) if total_revenue else 0
-        
-        report = {
-            "period": {
-                "start": start_date.isoformat(),
-                "end": end_date.isoformat(),
-                "days": (end_date - start_date).days
-            },
+        return {
+            "revenue_data": revenue_data,
             "summary": {
                 "total_revenue": round(total_revenue, 2),
-                "total_units": total_units,
-                "grouped_by": group_by,
-                "top_performers": revenue_data[:10]
-            },
-            "breakdown": revenue_data
-        }
-        
-        if include_trends and len(revenue_data) > 0:
-            report["insights"] = self._generate_revenue_insights(revenue_data, group_by)
-        
-        return report
-    
-    def _group_sales_by_period(self, results, group_by: str) -> List[Dict]:
-        """Group sales data by time period"""
-        grouped = {}
-        
-        for result in results:
-            if group_by == "day":
-                key = result.order_date.date().isoformat()
-            elif group_by == "week":
-                # Get Monday of the week
-                monday = result.order_date.date() - timedelta(days=result.order_date.weekday())
-                key = monday.isoformat()
-            elif group_by == "month":
-                key = result.order_date.strftime("%Y-%m")
-            else:  # year
-                key = str(result.order_date.year)
-            
-            if key not in grouped:
-                grouped[key] = {"quantity": 0, "revenue": 0.0}
-            
-            grouped[key]["quantity"] += result.quantity
-            grouped[key]["revenue"] += (result.quantity * result.unit_price) - result.discount
-        
-        return [
-            {
-                "period": period,
-                "quantity": data["quantity"],
-                "revenue": round(data["revenue"], 2)
+                "total_periods": len(revenue_data),
+                "avg_revenue_per_period": round(total_revenue / len(revenue_data) if revenue_data else 0, 2)
             }
-            for period, data in sorted(grouped.items())
-        ]
-    
-    def _generate_revenue_insights(self, revenue_data: List[Dict], group_by: str) -> List[str]:
-        """Generate insights from revenue data"""
-        insights = []
-        
-        if revenue_data:
-            top_performer = revenue_data[0]
-            insights.append(f"Top performing {group_by}: {top_performer[group_by]} with ${top_performer['revenue']} ({top_performer['percentage_of_total']}% of total)")
-            
-            if len(revenue_data) > 1:
-                total_top_3 = sum(item['percentage_of_total'] for item in revenue_data[:3])
-                insights.append(f"Top 3 {group_by}s account for {total_top_3}% of total revenue")
-            
-            avg_revenue = sum(item['revenue'] for item in revenue_data) / len(revenue_data)
-            above_avg = len([item for item in revenue_data if item['revenue'] > avg_revenue])
-            insights.append(f"{above_avg} out of {len(revenue_data)} {group_by}s performed above average")
-        
-        return insights
+        }
 
 
 # Global tool registry instance
-tool_registry = ToolRegistry()
+mongodb_tool_registry = MongoDBToolRegistry()

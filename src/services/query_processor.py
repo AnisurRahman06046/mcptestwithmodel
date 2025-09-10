@@ -4,7 +4,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timedelta
 import logging
 from src.services.real_model_manager import real_model_manager as model_manager
-from src.services.tool_registry import tool_registry
+from src.services.tool_registry import mongodb_tool_registry
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +15,18 @@ class QueryProcessor:
     def __init__(self):
         self._token_usage = None  # Track token usage for current query
         self.intent_patterns = {
+            "greeting": [
+                r"^(hi|hello|hey|good morning|good afternoon|good evening)(\s|$|,|!)",
+                r"how are you|how's it going|what's up",
+                r"^(greetings|salutations)(\s|$|,|!)",
+                r"nice to meet you|pleasure to meet you"
+            ],
+            "general_conversation": [
+                r"^(thank you|thanks|appreciate|grateful)",
+                r"^(yes|no|okay|ok|sure|alright)(\s|$|,|!)",
+                r"can you help|need help|assistance",
+                r"what can you do|what are you|who are you"
+            ],
             "sales_inquiry": [
                 r"sales?|sold|revenue|earnings?|income",
                 r"how (much|many).*(sold|sales?|revenue)",
@@ -38,7 +50,11 @@ class QueryProcessor:
             "analytics_inquiry": [
                 r"analyz|trends?|insights?|reports?",
                 r"compare|comparison|vs|versus",
-                r"performance|metrics"
+                r"performance|metrics",
+                r"which products?|what products?|top products?|best products?",
+                r"most profit|highest profit|profitable|profitability",
+                r"generated|earned|made.*profit",
+                r"this week|last week|this month|last month"
             ]
         }
         
@@ -67,7 +83,7 @@ class QueryProcessor:
             ]
         }
     
-    def process_query(self, query: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def process_query(self, query: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Main query processing pipeline"""
         start_time = datetime.utcnow()
         
@@ -84,7 +100,7 @@ class QueryProcessor:
             # Step 4: Execute tools
             tool_results = []
             for tool_call in tool_calls:
-                result = tool_registry.execute_tool(tool_call["tool"], tool_call["parameters"])
+                result = await mongodb_tool_registry.execute_tool(tool_call["tool"], tool_call["parameters"])
                 tool_results.append(result)
             
             # Step 5: Generate response using model
@@ -97,11 +113,12 @@ class QueryProcessor:
             
             # Include token usage in metadata if available
             metadata = {
-                "intent": intent,
-                "entities": entities,
-                "tools_called": [tc["tool"] for tc in tool_calls],
+                "model_used": model_manager.active_model if model_manager.active_model else "template-based",
                 "execution_time_ms": int(execution_time),
-                "confidence_score": self._calculate_confidence(intent, entities, tool_results)
+                "tools_called": [tc["tool"] for tc in tool_calls],
+                "confidence_score": self._calculate_confidence(intent, entities, tool_results),
+                "query_intent": intent,
+                "extracted_entities": list(entities.keys()) if entities else []
             }
             
             if self._token_usage:
@@ -236,16 +253,22 @@ class QueryProcessor:
             if "category" in entities:
                 params["category"] = entities["category"]
             
+            # Add time period if available
+            if "time_period" in entities:
+                params.update(self._map_time_period(entities))
+            
             # Determine if it's product analytics or revenue report
-            if re.search(r"product|performance|best", query.lower()):
+            if re.search(r"product|performance|best|top|profit|which.*products?|what.*products?", query.lower()):
                 tool_calls.append({"tool": "get_product_analytics", "parameters": params})
             else:
-                if "time_period" in entities:
-                    params.update(self._map_time_period(entities))
                 tool_calls.append({"tool": "get_revenue_report", "parameters": params})
         
-        # Default fallback
-        if not tool_calls:
+        # Handle greetings and general conversation - no tool calls needed
+        if intent in ["greeting", "general_conversation"]:
+            return []
+        
+        # Default fallback - only for business queries
+        if not tool_calls and intent not in ["greeting", "general_conversation", "general_inquiry"]:
             tool_calls.append({"tool": "get_sales_data", "parameters": {}})
         
         return tool_calls
@@ -281,7 +304,15 @@ class QueryProcessor:
     ) -> str:
         """Generate natural language response using the model"""
         
-        # Auto-load the best model for this query
+        # Handle greetings and general conversation without model
+        if intent == "greeting":
+            return self._generate_greeting_response(query)
+        elif intent == "general_conversation":
+            return self._generate_conversational_response(query, entities)
+        elif intent == "general_inquiry" and not tool_results:
+            return self._generate_help_response()
+        
+        # For business queries, use model if available
         try:
             if not model_manager.auto_load_best_model(query):
                 logger.warning("No suitable model available, using template response")
@@ -312,6 +343,38 @@ class QueryProcessor:
             # Reset token usage on error
             self._token_usage = None
             return self._generate_template_response(intent, tool_results)
+    
+    def _generate_greeting_response(self, query: str) -> str:
+        """Generate natural greeting response"""
+        query_lower = query.lower().strip()
+        
+        if "how are you" in query_lower or "how's it going" in query_lower:
+            return "Hello! I'm doing well, thank you for asking. I'm here to help you analyze your e-commerce data. How can I assist you today?"
+        elif any(greeting in query_lower for greeting in ["good morning", "good afternoon", "good evening"]):
+            return "Good day! I'm ready to help you with your business analytics and data insights. What would you like to know?"
+        elif "what's up" in query_lower:
+            return "Hello! Not much, just ready to help you dive into your business data. What would you like to explore today?"
+        else:
+            return "Hello! I'm your e-commerce data assistant. I can help you analyze sales, inventory, customers, orders, and business performance. What would you like to know?"
+    
+    def _generate_conversational_response(self, query: str, entities: Dict[str, Any]) -> str:
+        """Generate natural conversational response"""
+        query_lower = query.lower().strip()
+        
+        if query_lower.startswith(("thank", "thanks", "appreciate")):
+            return "You're very welcome! I'm here whenever you need insights about your business data. Feel free to ask me anything about your sales, inventory, customers, or orders."
+        elif query_lower in ["yes", "no", "okay", "ok", "sure", "alright"]:
+            return "Great! What would you like to explore about your business today? I can analyze sales trends, inventory levels, customer behavior, or order patterns."
+        elif "can you help" in query_lower or "need help" in query_lower:
+            return "Absolutely! I can help you analyze your e-commerce data. Try asking me about sales performance, inventory status, top customers, recent orders, or business trends."
+        elif "what can you do" in query_lower or "what are you" in query_lower:
+            return "I'm your e-commerce data analyst! I can help you understand your business performance by analyzing sales data, tracking inventory levels, identifying top customers, monitoring orders, and generating insights to help you make better business decisions."
+        else:
+            return "I'm here to help with your business analytics. You can ask me about sales, inventory, customers, orders, or any specific business metrics you'd like to explore."
+    
+    def _generate_help_response(self) -> str:
+        """Generate helpful response for general inquiries"""
+        return "I'm your e-commerce business analyst. I can help you with:\n• Sales analysis and revenue reports\n• Inventory monitoring and stock alerts\n• Customer insights and top buyer identification\n• Order tracking and fulfillment status\n• Business performance analytics\n\nJust ask me about any aspect of your business data!"
     
     def _create_model_prompt(
         self, 
@@ -451,9 +514,23 @@ Answer:"""
     def _structure_data(self, tool_results: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """Structure the tool results into a consistent format"""
         if not tool_results:
-            return None
+            return {
+                "product": None,
+                "category": None,
+                "period": None,
+                "metrics": None,
+                "filters": None,
+                "results": None
+            }
         
-        structured = {}
+        structured = {
+            "product": None,
+            "category": None,
+            "period": None,
+            "metrics": None,
+            "filters": None,
+            "results": None
+        }
         
         for result in tool_results:
             if result.get('success'):
@@ -461,29 +538,33 @@ Answer:"""
                 result_data = result.get('result', {})
                 
                 if tool_name == "get_sales_data":
-                    structured.update({
-                        "metrics": {
-                            "quantity": result_data.get('total_quantity'),
-                            "revenue": result_data.get('total_revenue'),
-                            "average_price": result_data.get('average_order_value')
-                        },
-                        "breakdown": result_data.get('breakdown', [])
-                    })
+                    structured["metrics"] = {
+                        "quantity": result_data.get('total_quantity'),
+                        "revenue": result_data.get('total_revenue'),
+                        "average_price": result_data.get('average_order_value')
+                    }
+                    structured["results"] = result_data.get('breakdown', [])
                 
                 elif tool_name == "get_inventory_status":
-                    structured.update({
+                    structured["results"] = {
                         "inventory_summary": {
                             "total_products": result_data.get('total_products'),
                             "low_stock_count": result_data.get('low_stock_count'),
                             "out_of_stock_count": result_data.get('out_of_stock_count')
                         },
                         "critical_items": result_data.get('low_stock_items', [])[:5]
-                    })
+                    }
                 
                 elif tool_name in ["get_customer_info", "get_order_details", "get_product_analytics", "get_revenue_report"]:
-                    structured["results"] = result_data
+                    # Ensure results is always a list for API validation
+                    if isinstance(result_data, dict):
+                        structured["results"] = [result_data]
+                    elif isinstance(result_data, list):
+                        structured["results"] = result_data
+                    else:
+                        structured["results"] = [{"data": result_data}]
         
-        return structured if structured else None
+        return structured
     
     def _calculate_confidence(
         self, 
@@ -492,6 +573,16 @@ Answer:"""
         tool_results: List[Dict[str, Any]]
     ) -> float:
         """Calculate confidence score for the response"""
+        
+        # High confidence for greetings and conversational responses
+        if intent in ["greeting", "general_conversation"]:
+            return 0.95
+        
+        # High confidence for help responses
+        if intent == "general_inquiry" and not tool_results:
+            return 0.9
+        
+        # For business queries with data
         confidence = 0.5  # Base confidence
         
         # Boost confidence for successful intent classification

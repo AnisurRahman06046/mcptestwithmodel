@@ -1,11 +1,10 @@
 import logging
 import time
-from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from src.config import settings
-from src.database import init_database, seed_database
+from src.core.events import lifespan, configure_startup_tasks, configure_shutdown_tasks
 from src.api.routes import query, models, tools, health
 import uvicorn
 
@@ -21,27 +20,9 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Application lifespan events"""
-    # Startup
-    logger.info("Starting E-commerce MCP Server...")
-    
-    # Initialize database
-    try:
-        init_database()
-        if settings.SEED_DATABASE:
-            seed_database()
-    except Exception as e:
-        logger.error(f"Failed to initialize database: {e}")
-        raise
-    
-    yield
-    
-    # Shutdown
-    logger.info("Shutting down E-commerce MCP Server...")
-
+# Configure startup and shutdown tasks
+configure_startup_tasks()
+configure_shutdown_tasks()
 
 # Create FastAPI app
 app = FastAPI(

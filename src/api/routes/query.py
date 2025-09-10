@@ -1,7 +1,5 @@
-from fastapi import APIRouter, HTTPException, Depends
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, HTTPException
 from src.models.api import QueryRequest, QueryResponse, QueryMetadata, StructuredData, TokenUsage
-from src.database import get_db
 from src.services.query_processor import query_processor
 import logging
 
@@ -10,14 +8,14 @@ logger = logging.getLogger(__name__)
 
 
 @router.post("/query", response_model=QueryResponse)
-async def process_query(request: QueryRequest, db: Session = Depends(get_db)):
+async def process_query(request: QueryRequest):
     """Process natural language queries and return structured responses"""
     
     try:
         logger.info(f"Processing query: {request.query}")
         
         # Process the query using the query processor
-        result = query_processor.process_query(
+        result = await query_processor.process_query(
             query=request.query,
             context=request.context.dict() if request.context else None
         )

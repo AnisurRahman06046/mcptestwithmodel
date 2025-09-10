@@ -1,4 +1,4 @@
-from .connection import get_db, init_database
-from .seed_data import seed_database
+from .mongodb import init_database, close_database, get_database
+from .manager import database_manager
 
-__all__ = ["get_db", "init_database", "seed_database"]
+__all__ = ["init_database", "close_database", "get_database", "database_manager"]

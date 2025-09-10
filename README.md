@@ -1,10 +1,17 @@
-# E-commerce Local MCP Server
+# E-commerce MongoDB MCP Server
 
-A local Model Context Protocol (MCP) server that integrates with e-commerce platforms, enabling shop owners to query their business data using natural language through AI models running on local infrastructure.
+A modern Model Context Protocol (MCP) server that integrates with e-commerce platforms, enabling shop owners to query their business data using natural language. Built with **MongoDB Atlas**, **clean architecture**, and **async Python**.
 
-## Overview
+## 🚀 Overview
 
-This project provides a secure, privacy-focused solution for e-commerce platforms to offer AI-powered data queries without sending sensitive business data to external services. The server leverages multiple local AI models (Llama 3, Mistral, Phi-3) to process natural language queries and retrieve data from e-commerce databases.
+This project provides a scalable, cloud-native solution for e-commerce platforms to offer AI-powered data queries. The server uses **MongoDB Atlas** for flexible data storage and supports multiple local AI models (Llama 3, Mistral, Phi-3) to process natural language queries.
+
+### **🏗️ Modern Architecture**
+- **MongoDB Atlas**: Cloud-native document database with connection pooling
+- **AsyncMongoClient**: Modern async database operations 
+- **Clean Architecture**: Separated concerns and dependency injection
+- **UUID Primary Keys**: Scalable, database-agnostic document IDs
+- **Type-Safe Models**: Pydantic validation with full async support
 
 ## Key Features
 

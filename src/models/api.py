@@ -18,7 +18,7 @@ class QueryOptions(BaseModel):
 
 class QueryRequest(BaseModel):
     query: str = Field(..., description="Natural language query to process")
-    context: Optional[QueryContext] = None
+    # context: Optional[QueryContext] = None  # Will be extracted from token
     options: Optional[QueryOptions] = None
 
 

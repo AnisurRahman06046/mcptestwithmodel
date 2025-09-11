@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from src.config import settings
 from src.core.events import lifespan, configure_startup_tasks, configure_shutdown_tasks
-from src.api.routes import query, models, tools, health
+from src.api.routes import query, models, tools, health, sync
 import uvicorn
 
 # Configure logging
@@ -67,6 +67,7 @@ app.include_router(health.router, prefix="/health", tags=["Health"])
 app.include_router(query.router, prefix="", tags=["Query"])
 app.include_router(models.router, prefix="/models", tags=["Models"])
 app.include_router(tools.router, prefix="/tools", tags=["Tools"])
+app.include_router(sync.router, prefix="/sync", tags=["Sync"])
 
 
 @app.get("/")

@@ -29,6 +29,10 @@ class MongoDBToolRegistry:
         if tool_name not in self.tools:
             raise ValueError(f"Unknown tool: {tool_name}")
         
+        # Ensure shop_id is present for shop-aware queries
+        if 'shop_id' not in parameters:
+            logger.warning(f"Tool {tool_name} called without shop_id - this may return data for all shops")
+        
         try:
             if not mongodb_client.is_connected:
                 await mongodb_client.connect()
@@ -57,12 +61,17 @@ class MongoDBToolRegistry:
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
         product: Optional[str] = None,
-        category: Optional[str] = None
+        category: Optional[str] = None,
+        shop_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """Get sales data with optional filtering"""
         
         # Build match pipeline
         match_conditions = {}
+        
+        # CRITICAL: Filter by shop_id for multi-tenant support
+        if shop_id:
+            match_conditions["shop_id"] = shop_id
         
         # Date filtering
         if start_date or end_date:
@@ -91,7 +100,12 @@ class MongoDBToolRegistry:
         ]
         
         # Execute aggregation
-        result = await db.orders.aggregate(pipeline).to_list(length=1)
+        cursor = db.orders.aggregate(pipeline)
+        result = []
+        async for doc in cursor:
+            result.append(doc)
+            if len(result) >= 1:
+                break
         
         if not result:
             return {
@@ -154,7 +168,12 @@ class MongoDBToolRegistry:
         ])
         
         # Execute aggregation and get results
-        breakdown_result = await db.orders.aggregate(pipeline).to_list(length=10)
+        cursor = db.orders.aggregate(pipeline)
+        breakdown_result = []
+        async for doc in cursor:
+            breakdown_result.append(doc)
+            if len(breakdown_result) >= 10:
+                break
         
         breakdown = []
         for doc in breakdown_result:
@@ -171,12 +190,17 @@ class MongoDBToolRegistry:
         db,
         product: Optional[str] = None,
         category: Optional[str] = None,
-        low_stock_threshold: Optional[int] = None
+        low_stock_threshold: Optional[int] = None,
+        shop_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """Get inventory status with optional filtering"""
         
         # Build match conditions
         match_conditions = {}
+        
+        # CRITICAL: Filter by shop_id for multi-tenant support
+        if shop_id:
+            match_conditions["shop_id"] = shop_id
         
         if product:
             match_conditions["product_name"] = {"$regex": product, "$options": "i"}
@@ -192,7 +216,12 @@ class MongoDBToolRegistry:
         ]
         
         # Execute low stock aggregation
-        low_stock_result = await db.inventory.aggregate(low_stock_pipeline).to_list(length=20)
+        cursor = db.inventory.aggregate(low_stock_pipeline)
+        low_stock_result = []
+        async for doc in cursor:
+            low_stock_result.append(doc)
+            if len(low_stock_result) >= 20:
+                break
         
         low_stock_items = []
         for doc in low_stock_result:
@@ -221,7 +250,12 @@ class MongoDBToolRegistry:
             }
         ]
         
-        summary_result = await db.inventory.aggregate(summary_pipeline).to_list(length=1)
+        cursor = db.inventory.aggregate(summary_pipeline)
+        summary_result = []
+        async for doc in cursor:
+            summary_result.append(doc)
+            if len(summary_result) >= 1:
+                break
         summary = summary_result[0] if summary_result else {}
         
         return {
@@ -237,13 +271,17 @@ class MongoDBToolRegistry:
         db,
         customer_id: Optional[str] = None,
         include_orders: bool = True,
-        limit: int = 10
+        limit: int = 10,
+        shop_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """Get customer information with optional order details"""
         
         if customer_id:
             # Get specific customer
-            customer = await db.customers.find_one({"customer_id": customer_id})
+            query = {"customer_id": customer_id}
+            if shop_id:
+                query["shop_id"] = shop_id
+            customer = await db.customers.find_one(query)
             if not customer:
                 return {"error": "Customer not found"}
             
@@ -255,7 +293,12 @@ class MongoDBToolRegistry:
                 {"$limit": limit}
             ]
             
-            customers_list = await db.customers.aggregate(pipeline).to_list(length=limit)
+            cursor = db.customers.aggregate(pipeline)
+            customers_list = []
+            async for doc in cursor:
+                customers_list.append(doc)
+                if len(customers_list) >= limit:
+                    break
         
         # Format customer data
         customers = []
@@ -273,8 +316,11 @@ class MongoDBToolRegistry:
             if include_orders and customer_id:
                 # Get recent orders for specific customer
                 recent_orders = []
+                order_query = {"customer_id": customer["customer_id"]}
+                if shop_id:
+                    order_query["shop_id"] = shop_id
                 cursor = db.orders.find(
-                    {"customer_id": customer["customer_id"]},
+                    order_query,
                     sort=[("order_date", -1)],
                     limit=5
                 )
@@ -302,12 +348,17 @@ class MongoDBToolRegistry:
         status: Optional[str] = None,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
-        limit: int = 20
+        limit: int = 20,
+        shop_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """Get order details with filtering"""
         
         # Build match conditions
         match_conditions = {}
+        
+        # CRITICAL: Filter by shop_id for multi-tenant support
+        if shop_id:
+            match_conditions["shop_id"] = shop_id
         
         if order_id:
             match_conditions["order_id"] = order_id
@@ -366,7 +417,8 @@ class MongoDBToolRegistry:
         product: Optional[str] = None,
         category: Optional[str] = None,
         start_date: Optional[str] = None,
-        end_date: Optional[str] = None
+        end_date: Optional[str] = None,
+        shop_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """Get product performance analytics"""
         
@@ -411,7 +463,12 @@ class MongoDBToolRegistry:
         ])
         
         # Execute aggregation and get results
-        aggregation_result = await db.orders.aggregate(pipeline).to_list(length=20)
+        cursor = db.orders.aggregate(pipeline)
+        aggregation_result = []
+        async for doc in cursor:
+            aggregation_result.append(doc)
+            if len(aggregation_result) >= 20:
+                break
         
         products = []
         for doc in aggregation_result:
@@ -434,7 +491,8 @@ class MongoDBToolRegistry:
         db,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
-        group_by: str = "day"
+        group_by: str = "day",
+        shop_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """Get revenue report grouped by time period"""
         
@@ -481,7 +539,12 @@ class MongoDBToolRegistry:
         ]
         
         # Execute revenue aggregation
-        revenue_result = await db.orders.aggregate(pipeline).to_list(length=50)
+        cursor = db.orders.aggregate(pipeline)
+        revenue_result = []
+        async for doc in cursor:
+            revenue_result.append(doc)
+            if len(revenue_result) >= 50:
+                break
         
         revenue_data = []
         total_revenue = 0

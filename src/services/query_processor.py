@@ -95,7 +95,7 @@ class QueryProcessor:
             entities = self._extract_entities(query)
             
             # Step 3: Tool selection and parameter mapping
-            tool_calls = self._select_tools(intent, entities, query)
+            tool_calls = self._select_tools(intent, entities, query, context)
             
             # Step 4: Execute tools
             tool_results = []
@@ -195,12 +195,17 @@ class QueryProcessor:
         
         return entities
     
-    def _select_tools(self, intent: str, entities: Dict[str, Any], query: str) -> List[Dict[str, Any]]:
+    def _select_tools(self, intent: str, entities: Dict[str, Any], query: str, context: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """Select appropriate tools and map parameters based on intent and entities"""
         tool_calls = []
         
+        # Extract shop_id from context for all tools
+        base_params = {}
+        if context and context.get('shop_id'):
+            base_params['shop_id'] = context['shop_id']
+        
         if intent == "sales_inquiry":
-            params = {}
+            params = base_params.copy()
             if "product" in entities:
                 params["product"] = entities["product"]
             if "category" in entities:
@@ -211,7 +216,7 @@ class QueryProcessor:
             tool_calls.append({"tool": "get_sales_data", "parameters": params})
         
         elif intent == "inventory_inquiry":
-            params = {}
+            params = base_params.copy()
             if "product" in entities:
                 params["product"] = entities["product"]
             if "category" in entities:
@@ -222,7 +227,8 @@ class QueryProcessor:
             tool_calls.append({"tool": "get_inventory_status", "parameters": params})
         
         elif intent == "customer_inquiry":
-            params = {"include_orders": True}
+            params = base_params.copy()
+            params["include_orders"] = True
             
             # Check if asking for specific customer info
             if re.search(r"customer.*(id|email)", query.lower()):
@@ -232,7 +238,7 @@ class QueryProcessor:
             tool_calls.append({"tool": "get_customer_info", "parameters": params})
         
         elif intent == "order_inquiry":
-            params = {}
+            params = base_params.copy()
             
             # Extract order status if mentioned
             statuses = ["pending", "processing", "shipped", "fulfilled", "cancelled"]
@@ -247,7 +253,7 @@ class QueryProcessor:
             tool_calls.append({"tool": "get_order_details", "parameters": params})
         
         elif intent == "analytics_inquiry":
-            params = {}
+            params = base_params.copy()
             if "product" in entities:
                 params["product"] = entities["product"]
             if "category" in entities:
@@ -269,7 +275,7 @@ class QueryProcessor:
         
         # Default fallback - only for business queries
         if not tool_calls and intent not in ["greeting", "general_conversation", "general_inquiry"]:
-            tool_calls.append({"tool": "get_sales_data", "parameters": {}})
+            tool_calls.append({"tool": "get_sales_data", "parameters": base_params})
         
         return tool_calls
     

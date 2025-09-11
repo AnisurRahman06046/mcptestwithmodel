@@ -43,6 +43,22 @@ class Settings(BaseSettings):
     MOCK_PRODUCT_COUNT: int = 50
     MOCK_ORDER_COUNT: int = 200
     
+    # MySQL Sync Configuration (optional - for sync feature)
+    MYSQL_HOST: Optional[str] = None
+    MYSQL_PORT: int = 3306
+    MYSQL_USER: Optional[str] = None
+    MYSQL_PASSWORD: Optional[str] = None
+    MYSQL_DATABASE: Optional[str] = None
+    MYSQL_CHARSET: str = "utf8mb4"
+    
+    # Sync Settings
+    SYNC_ENABLED: bool = False  # Disabled by default
+    SYNC_INTERVAL_MINUTES: int = 60
+    SYNC_BATCH_SIZE: int = 1000
+    SYNC_ONLY_TIMESTAMP_TABLES: bool = True
+    SYNC_AUTO_START: bool = False
+    SYNC_TABLES: Optional[str] = None  # Comma-separated table names
+    
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

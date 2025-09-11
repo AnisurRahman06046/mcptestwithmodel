@@ -1,6 +1,7 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Header
 from src.models.api import QueryRequest, QueryResponse, QueryMetadata, StructuredData, TokenUsage
 from src.services.query_processor import query_processor
+from src.services.auth_service import auth_service
 import logging
 
 router = APIRouter()
@@ -8,16 +9,23 @@ logger = logging.getLogger(__name__)
 
 
 @router.post("/query", response_model=QueryResponse)
-async def process_query(request: QueryRequest):
+async def process_query(
+    request: QueryRequest, 
+    authorization: str = Header(..., description="Bearer token for authentication")
+):
     """Process natural language queries and return structured responses"""
     
     try:
-        logger.info(f"Processing query: {request.query}")
+        logger.info(f"Processing authenticated query: {request.query}")
         
-        # Process the query using the query processor
+        # Step 1: Authenticate and get user context
+        context = await auth_service.authenticate_request(authorization)
+        logger.info(f"Authenticated user: {context.user_id}, shop: {context.shop_id}")
+        
+        # Step 2: Process the query using the query processor with context
         result = await query_processor.process_query(
             query=request.query,
-            context=request.context.dict() if request.context else None
+            context=context.dict()
         )
         
         # Convert the result to the API response format

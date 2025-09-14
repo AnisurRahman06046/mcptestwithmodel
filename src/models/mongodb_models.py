@@ -336,3 +336,82 @@ class UserTokenUsage(BaseModel):
                 "total_queries": 134
             }
         }
+
+
+class Conversation(BaseModel):
+    """Conversation document model for MongoDB."""
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), alias="_id")
+    conversation_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str = Field(..., min_length=1)
+    shop_id: str = Field(..., min_length=1)
+
+    # Conversation metadata
+    title: str = Field(default="New Chat", max_length=200)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    # Statistics
+    message_count: int = Field(default=0, ge=0)
+    total_tokens_used: int = Field(default=0, ge=0)
+
+    # Status and organization
+    status: str = Field(default="active")  # active, archived
+    is_pinned: bool = Field(default=False)
+
+    class Config:
+        populate_by_name = True
+        json_schema_extra = {
+            "example": {
+                "_id": "066de609-b04a-4b30-b46c-32537c7f1f6e",
+                "conversation_id": "conv-123e4567-e89b-12d3-a456-426614174000",
+                "user_id": "user123",
+                "shop_id": "shop456",
+                "title": "Sales Analysis Discussion",
+                "message_count": 8,
+                "status": "active"
+            }
+        }
+
+
+class ConversationMessage(BaseModel):
+    """Conversation message document model for MongoDB."""
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), alias="_id")
+    message_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    conversation_id: str = Field(..., min_length=1)
+
+    # Message content
+    role: str = Field(..., description="user, assistant, system, or tool")
+    content: str = Field(..., min_length=1)
+    message_index: int = Field(..., ge=0, description="Order in conversation")
+
+    # Timestamps
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+    # Token tracking (for assistant messages)
+    tokens_used: int = Field(default=0, ge=0)
+    execution_time_ms: int = Field(default=0, ge=0)
+    model_used: Optional[str] = None
+
+    # Enhanced data for assistant messages
+    structured_data: Optional[Dict[str, Any]] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    # Status
+    status: str = Field(default="active")  # active, edited, deleted
+
+    class Config:
+        populate_by_name = True
+        protected_namespaces = ()
+        json_schema_extra = {
+            "example": {
+                "_id": "066de609-b04a-4b30-b46c-32537c7f1f6e",
+                "message_id": "msg-123e4567-e89b-12d3-a456-426614174000",
+                "conversation_id": "conv-123e4567-e89b-12d3-a456-426614174000",
+                "role": "user",
+                "content": "Show me last month's sales",
+                "message_index": 0,
+                "tokens_used": 0
+            }
+        }

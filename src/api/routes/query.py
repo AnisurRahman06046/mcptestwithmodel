@@ -7,6 +7,7 @@ from src.services.query_processor import query_processor
 from src.services.auth_service import auth_service
 from src.services.token_service import token_service
 from src.services.subscription_service import subscription_service
+from src.services.conversation_service import conversation_service
 import logging
 
 router = APIRouter()
@@ -71,9 +72,42 @@ async def process_query(
                 }
             )
 
+    # Step 3: Handle conversation (ChatGPT-like flow)
+    conversation = None
+    if request.conversation_id:
+        # Continue existing conversation
+        conversation = await conversation_service.get_conversation(
+            request.conversation_id,
+            context.user_id
+        )
+        if not conversation:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "error": "CONVERSATION_NOT_FOUND",
+                    "message": "Conversation not found or access denied"
+                }
+            )
+    else:
+        # Create new conversation (first query in new chat session)
+        conversation = await conversation_service.create_conversation(
+            context.user_id,
+            context.shop_id,
+            request.query
+        )
+
+    # Step 4: Add user message to conversation
+    user_message = await conversation_service.add_message(
+        conversation["conversation_id"] if isinstance(conversation, dict) else conversation.conversation_id,
+        "user",
+        request.query,
+        tokens_used=0  # User messages don't consume tokens
+    )
+
     try:
 
-        # Step 3: Process the query using the query processor with context
+        # Step 5: Process the query using the query processor with context
         result = await query_processor.process_query(
             query=request.query,
             context=context.dict()
@@ -136,6 +170,19 @@ async def process_query(
             if result.get("structured_data"):
                 structured_data = StructuredData(**result["structured_data"])
 
+            # Step 7: Add assistant message to conversation
+            conversation_id = conversation["conversation_id"] if isinstance(conversation, dict) else conversation.conversation_id
+            assistant_message = await conversation_service.add_message(
+                conversation_id,
+                "assistant",
+                result["response"],
+                tokens_used=actual_tokens_used,
+                execution_time_ms=result["metadata"]["execution_time_ms"],
+                model_used=result["metadata"].get("model_used"),
+                structured_data=structured_data.dict() if structured_data else None,
+                metadata=result.get("debug", {})
+            )
+
             logger.info(f"Query processed successfully for user {context.user_id}, tokens used: {actual_tokens_used}")
 
             return QueryResponse(
@@ -145,7 +192,10 @@ async def process_query(
                 metadata=metadata,
                 debug=result.get("debug"),
                 user_token_info=user_token_info,
-                subscription_info=subscription_info
+                subscription_info=subscription_info,
+                # New conversation fields
+                conversation_id=conversation_id,
+                message_index=assistant_message.message_index
             )
         else:
             return QueryResponse(

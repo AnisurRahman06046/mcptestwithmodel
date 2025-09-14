@@ -20,6 +20,8 @@ class QueryRequest(BaseModel):
     query: str = Field(..., description="Natural language query to process")
     # context: Optional[QueryContext] = None  # Will be extracted from token
     options: Optional[QueryOptions] = None
+    # Optional conversation_id to continue existing conversation
+    conversation_id: Optional[str] = None
 
 
 class StructuredData(BaseModel):
@@ -77,6 +79,9 @@ class QueryResponse(BaseModel):
     debug: Optional[Dict[str, Any]] = None
     user_token_info: Optional[UserTokenInfo] = None
     subscription_info: Optional[SubscriptionInfo] = None
+    # New conversation fields (optional for backward compatibility)
+    conversation_id: Optional[str] = None
+    message_index: Optional[int] = None
 
 
 class ModelStatus(BaseModel):
@@ -242,5 +247,79 @@ class SubscriptionStatusResponse(BaseModel):
                 "avg_daily_usage": 425,
                 "usage_trend": "stable",
                 "status": "active"
+            }
+        }
+
+
+# Conversation API Models
+class ConversationListResponse(BaseModel):
+    """Response for listing user conversations"""
+
+    success: bool = True
+    conversations: List[Dict[str, Any]] = Field(default_factory=list)
+    total_count: int = 0
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "success": True,
+                "conversations": [
+                    {
+                        "conversation_id": "conv-uuid-123",
+                        "title": "Sales Analysis Discussion",
+                        "created_at": "2024-01-15T10:30:00Z",
+                        "updated_at": "2024-01-15T11:45:00Z",
+                        "message_count": 8,
+                        "total_tokens_used": 1850,
+                        "last_message_preview": "Based on your data...",
+                        "status": "active"
+                    }
+                ],
+                "total_count": 1
+            }
+        }
+
+
+class ConversationDetailResponse(BaseModel):
+    """Response for getting full conversation history"""
+
+    success: bool = True
+    conversation: Dict[str, Any] = Field(default_factory=dict)
+    messages: List[Dict[str, Any]] = Field(default_factory=list)
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "success": True,
+                "conversation": {
+                    "conversation_id": "conv-uuid-123",
+                    "title": "Sales Analysis Discussion",
+                    "created_at": "2024-01-15T10:30:00Z",
+                    "message_count": 4,
+                    "status": "active"
+                },
+                "messages": [
+                    {
+                        "message_id": "msg-uuid-1",
+                        "role": "user",
+                        "content": "Show me sales data",
+                        "message_index": 0,
+                        "timestamp": "2024-01-15T10:30:00Z",
+                        "tokens_used": 0
+                    }
+                ]
+            }
+        }
+
+
+class ConversationTitleUpdateRequest(BaseModel):
+    """Request for updating conversation title"""
+
+    title: str = Field(..., min_length=1, max_length=200)
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "title": "Q1 2024 Sales Analysis"
             }
         }

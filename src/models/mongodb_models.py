@@ -5,8 +5,8 @@ Clean, scalable, and database-agnostic approach.
 
 import uuid
 from pydantic import BaseModel, Field, EmailStr
-from typing import Optional, List
-from datetime import datetime
+from typing import Optional, List, Dict, Any
+from datetime import datetime, timedelta
 
 
 class Product(BaseModel):
@@ -230,19 +230,109 @@ class Inventory(BaseModel):
 
 class InventoryUpdate(BaseModel):
     """Model for updating inventory."""
-    
+
     quantity: Optional[int] = Field(None, ge=0)
     reserved_quantity: Optional[int] = Field(None, ge=0)
     reorder_level: Optional[int] = Field(None, ge=0)
     max_stock_level: Optional[int] = Field(None, ge=0)
     supplier: Optional[str] = Field(None, max_length=255)
     cost_per_unit: Optional[float] = Field(None, gt=0)
-    
+
     class Config:
         schema_extra = {
             "example": {
                 "quantity": 75,
                 "reorder_level": 15,
                 "supplier": "Apple Inc"
+            }
+        }
+
+
+class UserSubscription(BaseModel):
+    """User subscription model for MongoDB."""
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), alias="_id")
+    user_id: str = Field(..., min_length=1)
+    shop_id: str = Field(..., min_length=1)
+
+    # Subscription Details
+    plan_name: str = Field(..., min_length=1)
+    plan_display_name: str = Field(..., min_length=1)
+    allocated_tokens: int = Field(..., ge=0)
+    monthly_fee: float = Field(..., ge=0)
+    currency: str = Field(default="USD", max_length=3)
+
+    # Status
+    status: str = Field(default="active")  # active, suspended, cancelled, expired
+    billing_cycle: str = Field(default="monthly")
+
+    # Dates
+    subscription_start_date: datetime = Field(default_factory=datetime.utcnow)
+    current_period_start: datetime = Field(default_factory=datetime.utcnow)
+    current_period_end: datetime = Field(default_factory=lambda: datetime.utcnow() + timedelta(days=30))
+    next_billing_date: datetime = Field(default_factory=lambda: datetime.utcnow() + timedelta(days=30))
+
+    # History
+    plan_history: List[Dict] = Field(default_factory=list)
+
+    # Metadata
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_by: str = Field(default="platform")
+
+    class Config:
+        populate_by_name = True
+        schema_extra = {
+            "example": {
+                "_id": "066de609-b04a-4b30-b46c-32537c7f1f6e",
+                "user_id": "user123",
+                "shop_id": "shop456",
+                "plan_name": "pro",
+                "plan_display_name": "Pro Plan",
+                "allocated_tokens": 20000,
+                "monthly_fee": 29.99,
+                "currency": "USD",
+                "status": "active"
+            }
+        }
+
+
+class UserTokenUsage(BaseModel):
+    """Token usage tracking model for MongoDB."""
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), alias="_id")
+    user_id: str = Field(..., min_length=1)
+    shop_id: str = Field(..., min_length=1)
+    subscription_id: str = Field(..., min_length=1)
+
+    # Usage tracking
+    used_tokens: int = Field(default=0, ge=0)
+    current_period_start: datetime = Field(default_factory=datetime.utcnow)
+    current_period_end: datetime = Field(default_factory=lambda: datetime.utcnow() + timedelta(days=30))
+
+    # Usage breakdown
+    daily_usage: List[Dict] = Field(default_factory=list)
+    weekly_usage: List[Dict] = Field(default_factory=list)
+    monthly_summary: List[Dict] = Field(default_factory=list)
+
+    # Analytics
+    total_queries: int = Field(default=0, ge=0)
+    avg_tokens_per_query: float = Field(default=0.0)
+    peak_daily_usage: int = Field(default=0)
+
+    # Metadata
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    last_updated: datetime = Field(default_factory=datetime.utcnow)
+
+    class Config:
+        populate_by_name = True
+        schema_extra = {
+            "example": {
+                "_id": "066de609-b04a-4b30-b46c-32537c7f1f6e",
+                "user_id": "user123",
+                "shop_id": "shop456",
+                "subscription_id": "sub123",
+                "used_tokens": 5670,
+                "total_queries": 134
             }
         }

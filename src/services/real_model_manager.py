@@ -37,7 +37,7 @@ class RealModelManager:
                 "filename": "phi-3-mini-4k-instruct-q4.gguf",
                 "context_size": 4096,
                 "description": "Microsoft Phi-3 Mini - Lightweight and efficient",
-                "n_gpu_layers": 0,  # Use CPU only to avoid GPU issues
+                "n_gpu_layers": 35,  # GPU acceleration - will fallback to CPU if no GPU
                 "temperature": 0.7
             },
             "llama3-8b": {
@@ -53,6 +53,20 @@ class RealModelManager:
                 "description": "Google Gemma 2B - Very lightweight",
                 "n_gpu_layers": 15,
                 "temperature": 0.8
+            },
+            "qwen2.5-3b": {
+                "filename": "qwen2.5-3b-instruct-q4_k_m.gguf",
+                "context_size": 4096,
+                "description": "Qwen2.5 3B - Excellent reasoning and multilingual support",
+                "n_gpu_layers": 0,  # CPU-only system
+                "temperature": 0.7
+            },
+            "qwen2.5-1.5b": {
+                "filename": "qwen2.5-1.5b-instruct-q4_k_m.gguf",
+                "context_size": 2048,
+                "description": "Qwen2.5 1.5B - Ultra-fast lightweight model",
+                "n_gpu_layers": 0,  # CPU-only system
+                "temperature": 0.7
             }
         }
     
@@ -102,16 +116,29 @@ class RealModelManager:
                 
                 if LLAMA_CPP_AVAILABLE:
                     # Load real model using llama-cpp-python
-                    logger.info(f"Attempting to load with config: n_ctx={config['context_size']}, n_gpu_layers={config['n_gpu_layers']}")
-                    
-                    model = Llama(
-                        model_path=str(model_path),
-                        n_ctx=config["context_size"],
-                        n_threads=getattr(settings, 'MODEL_THREADS', 4),
-                        n_gpu_layers=config["n_gpu_layers"],
-                        verbose=True,  # Enable verbose for debugging
-                        seed=42  # For reproducible outputs during development
-                    )
+                    n_gpu_layers = config["n_gpu_layers"]
+                    logger.info(f"Attempting to load with config: n_ctx={config['context_size']}, n_gpu_layers={n_gpu_layers}")
+
+                    try:
+                        model = Llama(
+                            model_path=str(model_path),
+                            n_ctx=config["context_size"],
+                            n_threads=getattr(settings, 'MODEL_THREADS', 6),
+                            n_gpu_layers=n_gpu_layers,
+                            verbose=False,  # Reduce verbosity for performance
+                            seed=42  # For reproducible outputs during development
+                        )
+                    except Exception as gpu_error:
+                        logger.warning(f"GPU loading failed, falling back to CPU: {gpu_error}")
+                        # Fallback to CPU-only
+                        model = Llama(
+                            model_path=str(model_path),
+                            n_ctx=config["context_size"],
+                            n_threads=getattr(settings, 'MODEL_THREADS', 6),
+                            n_gpu_layers=0,  # CPU only fallback
+                            verbose=False,
+                            seed=42
+                        )
                     
                     # Verify model loaded correctly
                     if model.model is None:
@@ -240,24 +267,39 @@ class RealModelManager:
         
         # Complex analytical queries - use best available model
         if any(word in query_lower for word in ['analyze', 'compare', 'trend', 'insight', 'performance']):
-            if "llama3-8b" in available_models:
+            if "qwen2.5-3b" in available_models:
+                return "qwen2.5-3b"  # Best reasoning for analysis
+            elif "llama3-8b" in available_models:
                 return "llama3-8b"
             elif "phi-3-mini" in available_models:
                 return "phi-3-mini"
-        
+
         # Long queries - use model with good context
         elif query_len > 200:
-            if "llama3-8b" in available_models:
+            if "qwen2.5-3b" in available_models:
+                return "qwen2.5-3b"
+            elif "llama3-8b" in available_models:
                 return "llama3-8b"
             elif "phi-3-mini" in available_models:
                 return "phi-3-mini"
-        
-        # Short/simple queries - use lightweight model
-        else:
-            if "gemma-2b" in available_models:
+
+        # Greetings and simple queries - prioritize speed
+        elif any(word in query_lower for word in ['hello', 'hi', 'how are you', 'thanks', 'thank you']):
+            if "qwen2.5-1.5b" in available_models:
+                return "qwen2.5-1.5b"  # Ultra-fast for greetings
+            elif "qwen2.5-3b" in available_models:
+                return "qwen2.5-3b"
+            elif "gemma-2b" in available_models:
                 return "gemma-2b"
+
+        # Default/other queries - balanced choice
+        else:
+            if "qwen2.5-3b" in available_models:
+                return "qwen2.5-3b"  # Good balance of speed and quality
             elif "phi-3-mini" in available_models:
                 return "phi-3-mini"
+            elif "gemma-2b" in available_models:
+                return "gemma-2b"
         
         # Fallback to first available
         return available_models[0]

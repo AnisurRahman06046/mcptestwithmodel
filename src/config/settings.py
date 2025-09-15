@@ -22,9 +22,9 @@ class Settings(BaseSettings):
     
     # Model Configuration
     MODEL_PATH: str = "./data/models"
-    DEFAULT_MODEL: str = "llama3-7b"
+    DEFAULT_MODEL: str = "phi-3-mini"  # Set to available model
     MODEL_CONTEXT_SIZE: int = 4096
-    MODEL_THREADS: int = 4
+    MODEL_THREADS: int = 6  # Optimized for 8-core CPU (leave 2 cores free)
     MODEL_GPU_LAYERS: int = 35
     
     # Authentication

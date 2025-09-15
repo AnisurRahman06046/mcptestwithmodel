@@ -315,12 +315,8 @@ class QueryProcessor:
     ) -> str:
         """Generate natural language response using the model"""
         
-        # Handle greetings and general conversation without model
-        if intent == "greeting":
-            return self._generate_greeting_response(query)
-        elif intent == "general_conversation":
-            return self._generate_conversational_response(query, entities)
-        elif intent == "general_inquiry" and not tool_results:
+        # Handle help responses without model for speed
+        if intent == "general_inquiry" and not tool_results:
             return self._generate_help_response()
         
         # For business queries, use model if available
@@ -337,8 +333,10 @@ class QueryProcessor:
         
         try:
             logger.info(f"Starting model inference with active model: {model_manager.active_model}")
-            # Use model manager for generation with shorter max_tokens to reduce inference time
-            result = model_manager.inference(prompt, max_tokens=100, temperature=0.3)
+            # Optimize token count based on intent for faster responses
+            max_tokens = 30 if intent in ["greeting", "general_conversation"] else 100
+            temperature = 0.5 if intent in ["greeting", "general_conversation"] else 0.3
+            result = model_manager.inference(prompt, max_tokens=max_tokens, temperature=temperature)
             logger.info("Model inference completed successfully")
             
             # Clean up the response text
@@ -401,8 +399,12 @@ class QueryProcessor:
         
         # Build context based on intent
         context_parts = []
-        
-        if intent == "sales_inquiry":
+
+        if intent == "greeting":
+            context_parts.append("You are a friendly e-commerce business assistant. Respond naturally and warmly to the user's greeting.")
+        elif intent == "general_conversation":
+            context_parts.append("You are a helpful e-commerce business assistant. Respond conversationally and offer to help with business analytics.")
+        elif intent == "sales_inquiry":
             context_parts.append("You are analyzing sales data for an e-commerce business.")
         elif intent == "inventory_inquiry":
             context_parts.append("You are analyzing inventory levels for an e-commerce business.")
@@ -420,7 +422,18 @@ class QueryProcessor:
         context = "\n".join(context_parts)
         
         # Create the prompt
-        prompt = f"""{context}
+        if intent in ["greeting", "general_conversation"]:
+            # Shorter prompt for greetings/conversations for faster response
+            prompt = f"""{context}
+
+User: {query}
+
+Instructions: Reply naturally and briefly (under 30 words). Offer to help with their e-commerce business.
+
+Response:"""
+        else:
+            # Full prompt for business queries
+            prompt = f"""{context}
 
 User Question: {query}
 

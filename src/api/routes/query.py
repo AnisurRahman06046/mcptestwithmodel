@@ -162,7 +162,8 @@ async def process_query(
                 confidence_score=result["metadata"]["confidence_score"],
                 query_intent=result["metadata"].get("query_intent"),
                 extracted_entities=result["metadata"].get("extracted_entities", []),
-                token_usage=token_usage
+                token_usage=token_usage,
+                tokens_per_second=result["metadata"].get("tokens_per_second")
             )
 
             # Convert structured data

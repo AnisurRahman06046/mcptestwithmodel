@@ -120,9 +120,14 @@ class QueryProcessor:
                 "query_intent": intent,
                 "extracted_entities": list(entities.keys()) if entities else []
             }
-            
+
             if self._token_usage:
                 metadata["token_usage"] = self._token_usage
+                # Calculate tokens per second if we have token usage data
+                total_tokens = self._token_usage.get("total_tokens", 0)
+                if total_tokens > 0 and execution_time > 0:
+                    tokens_per_second = round((total_tokens * 1000) / execution_time, 2)
+                    metadata["tokens_per_second"] = tokens_per_second
             
             return {
                 "success": True,
@@ -552,14 +557,14 @@ Answer:"""
                     structured["results"] = result_data.get('breakdown', [])
                 
                 elif tool_name == "get_inventory_status":
-                    structured["results"] = {
+                    structured["results"] = [{
                         "inventory_summary": {
                             "total_products": result_data.get('total_products'),
                             "low_stock_count": result_data.get('low_stock_count'),
                             "out_of_stock_count": result_data.get('out_of_stock_count')
                         },
                         "critical_items": result_data.get('low_stock_items', [])[:5]
-                    }
+                    }]
                 
                 elif tool_name in ["get_customer_info", "get_order_details", "get_product_analytics", "get_revenue_report"]:
                     # Ensure results is always a list for API validation

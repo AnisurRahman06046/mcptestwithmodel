@@ -41,7 +41,7 @@ class TokenUsage(BaseModel):
 
 class QueryMetadata(BaseModel):
     model_config = {"protected_namespaces": ()}
-    
+
     model_used: str
     execution_time_ms: int
     tools_called: List[str]
@@ -49,6 +49,7 @@ class QueryMetadata(BaseModel):
     query_intent: Optional[str] = None
     extracted_entities: Optional[List[str]] = None
     token_usage: Optional[TokenUsage] = None
+    tokens_per_second: Optional[float] = None
 
 
 class UserTokenInfo(BaseModel):

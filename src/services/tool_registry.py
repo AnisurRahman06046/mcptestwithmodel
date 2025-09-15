@@ -100,14 +100,10 @@ class MongoDBToolRegistry:
         ]
         
         # Execute aggregation
-        cursor = db.orders.aggregate(pipeline)
-        result = []
-        async for doc in cursor:
-            result.append(doc)
-            if len(result) >= 1:
-                break
+        cursor = await db.orders.aggregate(pipeline)
+        pipeline_results = await cursor.to_list(length=1)
         
-        if not result:
+        if not pipeline_results:
             return {
                 "total_orders": 0,
                 "total_revenue": 0.0,
@@ -116,7 +112,7 @@ class MongoDBToolRegistry:
                 "breakdown": []
             }
         
-        data = result[0]
+        data = pipeline_results[0]
         
         # Get breakdown by product/category if specified
         breakdown = []
@@ -168,12 +164,8 @@ class MongoDBToolRegistry:
         ])
         
         # Execute aggregation and get results
-        cursor = db.orders.aggregate(pipeline)
-        breakdown_result = []
-        async for doc in cursor:
-            breakdown_result.append(doc)
-            if len(breakdown_result) >= 10:
-                break
+        cursor = await db.orders.aggregate(pipeline)
+        breakdown_result = await cursor.to_list(length=10)
         
         breakdown = []
         for doc in breakdown_result:
@@ -216,12 +208,8 @@ class MongoDBToolRegistry:
         ]
         
         # Execute low stock aggregation
-        cursor = db.inventory.aggregate(low_stock_pipeline)
-        low_stock_result = []
-        async for doc in cursor:
-            low_stock_result.append(doc)
-            if len(low_stock_result) >= 20:
-                break
+        cursor = await db.inventory.aggregate(low_stock_pipeline)
+        low_stock_result = await cursor.to_list(length=20)
         
         low_stock_items = []
         for doc in low_stock_result:
@@ -250,12 +238,8 @@ class MongoDBToolRegistry:
             }
         ]
         
-        cursor = db.inventory.aggregate(summary_pipeline)
-        summary_result = []
-        async for doc in cursor:
-            summary_result.append(doc)
-            if len(summary_result) >= 1:
-                break
+        cursor = await db.inventory.aggregate(summary_pipeline)
+        summary_result = await cursor.to_list(length=1)
         summary = summary_result[0] if summary_result else {}
         
         return {
@@ -293,12 +277,8 @@ class MongoDBToolRegistry:
                 {"$limit": limit}
             ]
             
-            cursor = db.customers.aggregate(pipeline)
-            customers_list = []
-            async for doc in cursor:
-                customers_list.append(doc)
-                if len(customers_list) >= limit:
-                    break
+            cursor = await db.customers.aggregate(pipeline)
+            customers_list = await cursor.to_list(length=limit)
         
         # Format customer data
         customers = []
@@ -324,7 +304,8 @@ class MongoDBToolRegistry:
                     sort=[("order_date", -1)],
                     limit=5
                 )
-                async for order in cursor:
+                orders_list = await cursor.to_list(length=5)
+                for order in orders_list:
                     recent_orders.append({
                         "order_id": order["order_id"],
                         "order_date": order["order_date"],
@@ -383,11 +364,11 @@ class MongoDBToolRegistry:
             sort=[("order_date", -1)],
             limit=limit
         )
-        
+        orders_list = await cursor.to_list(length=limit)
         orders = []
         total_value = 0
-        
-        async for order in cursor:
+
+        for order in orders_list:
             order_data = {
                 "order_id": order["order_id"],
                 "customer_name": order["customer_name"],
@@ -463,12 +444,8 @@ class MongoDBToolRegistry:
         ])
         
         # Execute aggregation and get results
-        cursor = db.orders.aggregate(pipeline)
-        aggregation_result = []
-        async for doc in cursor:
-            aggregation_result.append(doc)
-            if len(aggregation_result) >= 20:
-                break
+        cursor = await db.orders.aggregate(pipeline)
+        aggregation_result = await cursor.to_list(length=20)
         
         products = []
         for doc in aggregation_result:
@@ -539,12 +516,8 @@ class MongoDBToolRegistry:
         ]
         
         # Execute revenue aggregation
-        cursor = db.orders.aggregate(pipeline)
-        revenue_result = []
-        async for doc in cursor:
-            revenue_result.append(doc)
-            if len(revenue_result) >= 50:
-                break
+        cursor = await db.orders.aggregate(pipeline)
+        revenue_result = await cursor.to_list(length=50)
         
         revenue_data = []
         total_revenue = 0

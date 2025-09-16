@@ -6,6 +6,13 @@ import logging
 from src.services.real_model_manager import real_model_manager as model_manager
 from src.services.tool_registry import mongodb_tool_registry
 
+# Optional hybrid intent classification (feature flag controlled)
+try:
+    from src.services.hybrid_intent_classification import HybridIntentClassificationService, HybridConfig
+    HYBRID_INTENT_AVAILABLE = True
+except ImportError:
+    HYBRID_INTENT_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -14,6 +21,18 @@ class QueryProcessor:
     
     def __init__(self):
         self._token_usage = None  # Track token usage for current query
+
+        # Initialize hybrid intent classification (optional, non-breaking)
+        self.hybrid_intent_service = None
+        if HYBRID_INTENT_AVAILABLE:
+            try:
+                # Start with hybrid disabled (safe)
+                config = HybridConfig(enabled=False)  # Feature flag OFF by default
+                self.hybrid_intent_service = HybridIntentClassificationService(self, config)
+                logger.info("Hybrid intent classification available (disabled by default)")
+            except Exception as e:
+                logger.warning(f"Hybrid intent classification initialization failed: {e}")
+                self.hybrid_intent_service = None
         self.intent_patterns = {
             "greeting": [
                 r"^(hi|hello|hey|good morning|good afternoon|good evening)(\s|$|,|!)",
@@ -156,14 +175,49 @@ class QueryProcessor:
     
     def _classify_intent(self, query: str) -> str:
         """Classify the intent of the query"""
+        # Try hybrid classification if available and enabled
+        if (self.hybrid_intent_service and
+            self.hybrid_intent_service.config.enabled):
+            try:
+                import asyncio
+                # Use hybrid classification
+                intent = asyncio.run(self.hybrid_intent_service.classify_intent(query))
+                logger.debug(f"Hybrid classification: '{query}' -> '{intent}'")
+                return intent
+            except Exception as e:
+                logger.warning(f"Hybrid classification failed, falling back to regex: {e}")
+
+        # Fallback to existing regex classification (current system unchanged)
+        return self._classify_intent_regex(query)
+
+    def _classify_intent_regex(self, query: str) -> str:
+        """Original regex-based classification (preserved as fallback)"""
         query_lower = query.lower()
-        
+
         for intent, patterns in self.intent_patterns.items():
             for pattern in patterns:
                 if re.search(pattern, query_lower):
                     return intent
-        
+
         return "general_inquiry"
+
+    # Add methods to control hybrid system at runtime
+    async def enable_hybrid_intent_classification(self):
+        """Enable hybrid intent classification (can be called at runtime)"""
+        if self.hybrid_intent_service:
+            return await self.hybrid_intent_service.enable_hybrid_classification()
+        return False
+
+    def disable_hybrid_intent_classification(self):
+        """Disable hybrid intent classification (fallback to current system)"""
+        if self.hybrid_intent_service:
+            self.hybrid_intent_service.disable_hybrid_classification()
+
+    def get_intent_classification_metrics(self) -> Dict[str, Any]:
+        """Get intent classification performance metrics"""
+        if self.hybrid_intent_service:
+            return self.hybrid_intent_service.hybrid_classifier.get_metrics()
+        return {"hybrid_available": False, "using": "regex_patterns"}
     
     def _extract_entities(self, query: str) -> Dict[str, Any]:
         """Extract entities from the query"""
@@ -438,10 +492,11 @@ Response:"""
 User Question: {query}
 
 Instructions:
-- Answer directly and concisely
-- Use specific numbers from the data
+- Answer directly and concisely based ONLY on the provided data
+- Use ONLY the specific numbers from the data - do NOT make up or estimate any numbers
+- If data shows zeros or empty results, clearly state "no data available for this period"
 - Be conversational but professional
-- Focus on actionable insights
+- Focus on actionable insights when data is available
 - Keep response under 100 words
 
 Answer:"""

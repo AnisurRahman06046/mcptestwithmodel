@@ -36,12 +36,15 @@ class Settings(BaseSettings):
     MAX_CONCURRENT_REQUESTS: int = 5
     QUERY_TIMEOUT: int = 30
     MODEL_LOAD_TIMEOUT: int = 60
+
+    # Hybrid Intent Classification Settings (Feature Flag)
+    HYBRID_INTENT_ENABLED: bool = True  # Start disabled for safety
+    HYBRID_INTENT_CONFIDENCE_THRESHOLD: float = 0.8
+    HYBRID_INTENT_AUTO_RETRAIN: bool = True
+    HYBRID_INTENT_TRAINING_BUFFER_SIZE: int = 50
     
-    # Mock Data Settings
-    SEED_DATABASE: bool = True
-    MOCK_USER_COUNT: int = 100
-    MOCK_PRODUCT_COUNT: int = 50
-    MOCK_ORDER_COUNT: int = 200
+    # Database Settings
+    SEED_DATABASE: bool = False  # Disabled - use real data only
     
     # MySQL Sync Configuration (optional - for sync feature)
     MYSQL_HOST: Optional[str] = None

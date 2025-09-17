@@ -60,6 +60,7 @@ async def get_sync_scheduler() -> SyncScheduler:
 class SyncTriggerRequest(BaseModel):
     """Request model for triggering sync."""
     tables: Optional[list[str]] = Field(None, description="Specific tables to sync (optional)")
+    sync_all_tables: bool = Field(False, description="Sync all tables from source database")
     force_full_sync: bool = Field(False, description="Force full sync instead of incremental")
 
 
@@ -96,6 +97,20 @@ async def get_sync_status(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/sync-all")
+async def sync_all_tables(
+    force_full: bool = False,
+    background_tasks: BackgroundTasks = None,
+    sync_service: SyncService = Depends(get_sync_service)
+):
+    """Sync ALL tables from source database to MongoDB."""
+    request = SyncTriggerRequest(
+        sync_all_tables=True,
+        force_full_sync=force_full
+    )
+    return await trigger_sync(request, background_tasks, sync_service)
+
+
 @router.post("/trigger")
 async def trigger_sync(
     request: SyncTriggerRequest,
@@ -106,12 +121,20 @@ async def trigger_sync(
     try:
         if sync_service.status.value == "running":
             raise HTTPException(status_code=409, detail="Sync is already running")
-        
-        # If specific tables requested, temporarily override configuration
+
+        # Save original configuration
         original_tables = getattr(settings, 'SYNC_TABLES', None)
-        if request.tables:
-            settings.SYNC_TABLES = request.tables
-        
+        original_timestamp_only = getattr(settings, 'SYNC_ONLY_TIMESTAMP_TABLES', True)
+
+        # Configure tables to sync
+        if request.sync_all_tables:
+            # Sync all tables from database
+            settings.SYNC_TABLES = None
+            settings.SYNC_ONLY_TIMESTAMP_TABLES = False
+        elif request.tables:
+            # Sync specific tables
+            settings.SYNC_TABLES = ','.join(request.tables)
+
         # Reset sync times for force full sync
         if request.force_full_sync:
             if request.tables:
@@ -119,17 +142,26 @@ async def trigger_sync(
                     await sync_service.sync_tracker.reset_sync_time(table)
             else:
                 await sync_service.sync_tracker.reset_all_sync_times()
-        
+
         # Start sync in background
         background_tasks.add_task(sync_service.sync_all_tables)
-        
-        # Restore original configuration
-        if request.tables:
+
+        # Restore original configuration after task is added
+        if request.sync_all_tables or request.tables:
             settings.SYNC_TABLES = original_tables
-        
+            settings.SYNC_ONLY_TIMESTAMP_TABLES = original_timestamp_only
+
+        # Determine what's being synced
+        if request.sync_all_tables:
+            sync_target = "all tables from source database"
+        elif request.tables:
+            sync_target = f"tables: {', '.join(request.tables)}"
+        else:
+            sync_target = "configured tables"
+
         return {
             "message": "Sync triggered successfully",
-            "tables": request.tables or "all configured tables",
+            "tables": sync_target,
             "force_full_sync": request.force_full_sync
         }
         

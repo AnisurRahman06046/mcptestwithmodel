@@ -185,6 +185,11 @@ class SyncTracker:
             last_sync = doc["last_sync_time"]
             updated_at = doc.get("updated_at")
             
+            # Ensure timezone awareness for datetime comparison
+            if last_sync and last_sync.tzinfo is None:
+                # Make naive datetime timezone-aware (assuming UTC)
+                last_sync = last_sync.replace(tzinfo=timezone.utc)
+
             stats["tables"][table_name] = {
                 "last_sync_time": last_sync.isoformat() if last_sync else None,
                 "updated_at": updated_at.isoformat() if updated_at else None,

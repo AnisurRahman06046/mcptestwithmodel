@@ -61,6 +61,7 @@ class Settings(BaseSettings):
     SYNC_ONLY_TIMESTAMP_TABLES: bool = True
     SYNC_AUTO_START: bool = False
     SYNC_TABLES: Optional[str] = None  # Comma-separated table names
+    USE_DYNAMIC_SYNC: bool = True  # Use schema-less dynamic sync
     
     class Config:
         env_file = ".env"

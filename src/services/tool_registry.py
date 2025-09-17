@@ -21,7 +21,8 @@ class MongoDBToolRegistry:
             "get_customer_info": self.get_customer_info,
             "get_order_details": self.get_order_details,
             "get_product_analytics": self.get_product_analytics,
-            "get_revenue_report": self.get_revenue_report
+            "get_revenue_report": self.get_revenue_report,
+            "get_product_data": self.get_product_data  # New tool for product information
         }
     
     async def execute_tool(self, tool_name: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
@@ -71,19 +72,25 @@ class MongoDBToolRegistry:
         
         # CRITICAL: Filter by shop_id for multi-tenant support
         if shop_id:
-            match_conditions["shop_id"] = shop_id
+            # Convert shop_id to integer as it's stored as number in MongoDB
+            try:
+                match_conditions["shop_id"] = int(shop_id)
+            except (ValueError, TypeError):
+                match_conditions["shop_id"] = shop_id
         
-        # Date filtering
+        # Date filtering - using created_at field from synced data
         if start_date or end_date:
             date_filter = {}
             if start_date:
-                date_filter["$gte"] = datetime.fromisoformat(start_date)
+                date_filter["$gte"] = start_date  # Keep as string since MongoDB handles it
             if end_date:
-                date_filter["$lte"] = datetime.fromisoformat(end_date)
-            match_conditions["order_date"] = date_filter
+                date_filter["$lte"] = end_date + "T23:59:59"  # Include full day
+            match_conditions["created_at"] = date_filter
         
-        # Only include completed orders
-        match_conditions["status"] = {"$in": ["completed", "fulfilled", "shipped"]}
+        # Include various order statuses from synced data
+        # Status values from actual data: "New", "Processing", "Delivered", etc.
+        # For sales data, exclude cancelled orders
+        match_conditions["status"] = {"$nin": ["Cancelled", "Refunded"]}
         
         # Aggregation pipeline for sales data
         pipeline = [
@@ -92,15 +99,15 @@ class MongoDBToolRegistry:
                 "$group": {
                     "_id": None,
                     "total_orders": {"$sum": 1},
-                    "total_revenue": {"$sum": "$total_amount"},
-                    "total_items": {"$sum": {"$size": "$items"}},
-                    "average_order_value": {"$avg": "$total_amount"}
+                    "total_revenue": {"$sum": "$grand_total"},  # Using grand_total from synced data
+                    "total_items": {"$sum": 1},  # Simplified since items are in separate collection
+                    "average_order_value": {"$avg": "$grand_total"}
                 }
             }
         ]
         
         # Execute aggregation
-        cursor = await db.orders.aggregate(pipeline)
+        cursor = await db.order.aggregate(pipeline)  # Changed from 'orders' to 'order'
         pipeline_results = await cursor.to_list(length=1)
         
         if not pipeline_results:
@@ -164,7 +171,7 @@ class MongoDBToolRegistry:
         ])
         
         # Execute aggregation and get results
-        cursor = await db.orders.aggregate(pipeline)
+        cursor = await db.order.aggregate(pipeline)  # Changed from 'orders' to 'order'
         breakdown_result = await cursor.to_list(length=10)
         
         breakdown = []
@@ -192,7 +199,11 @@ class MongoDBToolRegistry:
         
         # CRITICAL: Filter by shop_id for multi-tenant support
         if shop_id:
-            match_conditions["shop_id"] = shop_id
+            # Convert shop_id to integer as it's stored as number in MongoDB
+            try:
+                match_conditions["shop_id"] = int(shop_id)
+            except (ValueError, TypeError):
+                match_conditions["shop_id"] = shop_id
         
         if product:
             match_conditions["product_name"] = {"$regex": product, "$options": "i"}
@@ -208,7 +219,7 @@ class MongoDBToolRegistry:
         ]
         
         # Execute low stock aggregation
-        cursor = await db.inventory.aggregate(low_stock_pipeline)
+        cursor = await db.warehouse.aggregate(low_stock_pipeline)  # Using 'warehouse' collection for inventory
         low_stock_result = await cursor.to_list(length=20)
         
         low_stock_items = []
@@ -238,7 +249,7 @@ class MongoDBToolRegistry:
             }
         ]
         
-        cursor = await db.inventory.aggregate(summary_pipeline)
+        cursor = await db.warehouse.aggregate(summary_pipeline)  # Using 'warehouse' collection for inventory
         summary_result = await cursor.to_list(length=1)
         summary = summary_result[0] if summary_result else {}
         
@@ -265,7 +276,7 @@ class MongoDBToolRegistry:
             query = {"customer_id": customer_id}
             if shop_id:
                 query["shop_id"] = shop_id
-            customer = await db.customers.find_one(query)
+            customer = await db.customer.find_one(query)  # Changed from 'customers' to 'customer'
             if not customer:
                 return {"error": "Customer not found"}
             
@@ -277,19 +288,20 @@ class MongoDBToolRegistry:
                 {"$limit": limit}
             ]
             
-            cursor = await db.customers.aggregate(pipeline)
+            cursor = await db.customer.aggregate(pipeline)  # Changed from 'customers' to 'customer'
             customers_list = await cursor.to_list(length=limit)
         
-        # Format customer data
+        # Format customer data (using .get() to handle missing fields)
         customers = []
         for customer in customers_list:
             customer_data = {
-                "customer_id": customer["customer_id"],
-                "name": customer["name"],
-                "email": customer["email"],
-                "total_orders": customer["total_orders"],
-                "total_spent": customer["total_spent"],
-                "loyalty_tier": customer["loyalty_tier"],
+                "customer_id": customer.get("customer_id", "unknown"),
+                "name": customer.get("name", "Unknown Customer"),
+                "email": customer.get("email", "no-email@example.com"),
+                "phone": customer.get("phone", "N/A"),
+                "total_orders": customer.get("total_orders", 0),
+                "total_spent": customer.get("total_spent", 0.0),
+                "loyalty_tier": customer.get("loyalty_tier", "Bronze"),
                 "last_purchase_date": customer.get("last_purchase_date")
             }
             
@@ -299,7 +311,7 @@ class MongoDBToolRegistry:
                 order_query = {"customer_id": customer["customer_id"]}
                 if shop_id:
                     order_query["shop_id"] = shop_id
-                cursor = db.orders.find(
+                cursor = db.order.find(  # Changed from 'orders' to 'order'
                     order_query,
                     sort=[("order_date", -1)],
                     limit=5
@@ -339,7 +351,11 @@ class MongoDBToolRegistry:
         
         # CRITICAL: Filter by shop_id for multi-tenant support
         if shop_id:
-            match_conditions["shop_id"] = shop_id
+            # Convert shop_id to integer as it's stored as number in MongoDB
+            try:
+                match_conditions["shop_id"] = int(shop_id)
+            except (ValueError, TypeError):
+                match_conditions["shop_id"] = shop_id
         
         if order_id:
             match_conditions["order_id"] = order_id
@@ -359,7 +375,7 @@ class MongoDBToolRegistry:
             match_conditions["order_date"] = date_filter
         
         # Get orders
-        cursor = db.orders.find(
+        cursor = db.order.find(  # Changed from 'orders' to 'order'
             match_conditions,
             sort=[("order_date", -1)],
             limit=limit
@@ -402,10 +418,18 @@ class MongoDBToolRegistry:
         shop_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """Get product performance analytics"""
-        
+
         # Build match conditions for orders
         match_conditions = {}
-        
+
+        # CRITICAL: Filter by shop_id for multi-tenant support
+        if shop_id:
+            # Convert shop_id to integer as it's stored as number in MongoDB
+            try:
+                match_conditions["shop_id"] = int(shop_id)
+            except (ValueError, TypeError):
+                match_conditions["shop_id"] = shop_id
+
         if start_date or end_date:
             date_filter = {}
             if start_date:
@@ -413,7 +437,7 @@ class MongoDBToolRegistry:
             if end_date:
                 date_filter["$lte"] = datetime.fromisoformat(end_date)
             match_conditions["order_date"] = date_filter
-        
+
         match_conditions["status"] = {"$in": ["completed", "fulfilled", "shipped"]}
         
         # Aggregation pipeline for product analytics
@@ -444,7 +468,7 @@ class MongoDBToolRegistry:
         ])
         
         # Execute aggregation and get results
-        cursor = await db.orders.aggregate(pipeline)
+        cursor = await db.order.aggregate(pipeline)  # Changed from 'orders' to 'order'
         aggregation_result = await cursor.to_list(length=20)
         
         products = []
@@ -516,7 +540,7 @@ class MongoDBToolRegistry:
         ]
         
         # Execute revenue aggregation
-        cursor = await db.orders.aggregate(pipeline)
+        cursor = await db.order.aggregate(pipeline)  # Changed from 'orders' to 'order'
         revenue_result = await cursor.to_list(length=50)
         
         revenue_data = []
@@ -538,6 +562,103 @@ class MongoDBToolRegistry:
                 "total_revenue": round(total_revenue, 2),
                 "total_periods": len(revenue_data),
                 "avg_revenue_per_period": round(total_revenue / len(revenue_data) if revenue_data else 0, 2)
+            }
+        }
+
+    async def get_product_data(
+        self,
+        db,
+        product: Optional[str] = None,
+        category: Optional[str] = None,
+        shop_id: Optional[str] = None,
+        status: Optional[str] = None,  # Added status filter
+        limit: int = 100
+    ) -> Dict[str, Any]:
+        """Get product information directly from product collection"""
+
+        # Build match conditions
+        match_conditions = {}
+
+        # Filter by shop_id
+        if shop_id:
+            try:
+                match_conditions["shop_id"] = int(shop_id)
+            except (ValueError, TypeError):
+                match_conditions["shop_id"] = shop_id
+
+        # Filter by product name
+        if product and product not in ["*", "all", ""]:
+            # Only apply filter if it's a real product name, not a wildcard
+            import re
+            # Escape special regex characters to avoid errors
+            escaped_product = re.escape(product)
+            match_conditions["name"] = {"$regex": escaped_product, "$options": "i"}
+
+        # Filter by category (would need to join with category collection)
+        if category and category not in ["*", "all", ""]:
+            # For now, just use category_id if it's numeric
+            try:
+                match_conditions["category_id"] = int(category)
+            except:
+                pass  # Skip category filter if not numeric or wildcard
+
+        # Filter by status (active, inactive, etc.)
+        if status and status.lower() != "all":
+            match_conditions["status"] = status.lower()
+
+        # Get product count
+        total_count = await db.product.count_documents(match_conditions)
+
+        # Get products with aggregation for price statistics
+        pipeline = [
+            {"$match": match_conditions},
+            {"$limit": limit}
+        ]
+
+        # Get sample products
+        cursor = await db.product.aggregate(pipeline)
+        products = await cursor.to_list(length=limit)
+
+        # Calculate price statistics (from SKU collection for accurate prices)
+        price_pipeline = [
+            {"$match": {"shop_id": int(shop_id) if shop_id else {"$exists": True}}},
+            {
+                "$group": {
+                    "_id": None,
+                    "highest_price": {"$max": "$price"},
+                    "lowest_price": {"$min": "$price"},
+                    "average_price": {"$avg": "$price"}
+                }
+            }
+        ]
+
+        cursor = await db.sku.aggregate(price_pipeline)
+        price_stats = await cursor.to_list(length=1)
+        price_data = price_stats[0] if price_stats else {}
+
+        # Format product list
+        product_list = []
+        for prod in products[:10]:  # Return top 10 products
+            product_list.append({
+                "id": prod.get("id"),
+                "name": prod.get("name"),
+                "sku": prod.get("sku"),
+                "category_id": prod.get("category_id"),
+                "brand_id": prod.get("brand_id"),
+                "status": prod.get("status"),
+                "shop_id": prod.get("shop_id")
+            })
+
+        return {
+            "total_products": total_count,
+            "highest_price": round(price_data.get("highest_price", 0), 2) if price_data.get("highest_price") else 0,
+            "lowest_price": round(price_data.get("lowest_price", 0), 2) if price_data.get("lowest_price") else 0,
+            "average_price": round(price_data.get("average_price", 0), 2) if price_data.get("average_price") else 0,
+            "sample_products": product_list,
+            "filters_applied": {
+                "shop_id": shop_id,
+                "product": product,
+                "category": category
             }
         }
 

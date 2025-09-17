@@ -56,7 +56,7 @@ class RealModelManager:
             },
             "qwen2.5-3b": {
                 "filename": "qwen2.5-3b-instruct-q4_k_m.gguf",
-                "context_size": 4096,
+                "context_size": 8192,  # Increased from 4096 - balance between capability and memory
                 "description": "Qwen2.5 3B - Excellent reasoning and multilingual support",
                 "n_gpu_layers": 0,  # CPU-only system
                 "temperature": 0.7

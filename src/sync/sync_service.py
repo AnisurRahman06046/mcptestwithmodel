@@ -11,7 +11,8 @@ from dataclasses import dataclass
 from enum import Enum
 
 from .mysql_connector import MySQLConnector, MySQLConnectionConfig, TableInfo
-from .data_mapper import DataMapper
+from .data_mapper import DataMapper  # Keep old mapper for backward compatibility
+from .dynamic_data_mapper import DynamicDataMapper  # New schema-less mapper
 from .sync_tracker import SyncTracker
 from ..database.mongodb import mongodb_client
 from ..config.settings import settings
@@ -66,7 +67,14 @@ class SyncService:
     
     def __init__(self):
         self.mysql_connector: Optional[MySQLConnector] = None
-        self.data_mapper = DataMapper()
+        # Use dynamic mapper by default for schema-less sync
+        self.use_dynamic_mapper = getattr(settings, 'USE_DYNAMIC_SYNC', True)
+        if self.use_dynamic_mapper:
+            self.data_mapper = DynamicDataMapper()
+            logger.info("Using DynamicDataMapper for schema-less sync")
+        else:
+            self.data_mapper = DataMapper()
+            logger.info("Using legacy DataMapper with predefined schemas")
         self.sync_tracker = SyncTracker()
         self.mongodb = None
         self.status = SyncStatus.IDLE
@@ -156,7 +164,7 @@ class SyncService:
         if self.status == SyncStatus.RUNNING:
             raise RuntimeError("Sync is already running")
         
-        sync_id = f"sync_{int(datetime.now().timestamp())}"
+        sync_id = f"sync_{int(datetime.now(timezone.utc).timestamp())}"
         self.current_sync = SyncResult(
             sync_id=sync_id,
             start_time=datetime.now(timezone.utc)
@@ -221,7 +229,7 @@ class SyncService:
     
     async def sync_table(self, table_name: str, table_info: TableInfo) -> TableSyncResult:
         """Sync a specific table from MySQL to MongoDB."""
-        start_time = datetime.now()
+        start_time = datetime.now(timezone.utc)
         result = TableSyncResult(table_name=table_name, success=False)
         
         logger.info(f"Starting sync for table: {table_name}")
@@ -247,7 +255,7 @@ class SyncService:
             
             # Transform data for MongoDB
             mongodb_data = await self.data_mapper.transform_table_data(
-                table_name, mysql_data, table_info
+                mysql_data, table_name, table_info
             )
             
             # Determine target collection name  
@@ -288,7 +296,7 @@ class SyncService:
             await self.sync_tracker.update_last_sync_time(table_name)
             
             # Calculate results
-            end_time = datetime.now()
+            end_time = datetime.now(timezone.utc)
             result.success = True
             result.records_processed = len(mongodb_data)
             result.records_created = records_created
@@ -305,7 +313,7 @@ class SyncService:
         except Exception as e:
             logger.error(f"Failed to sync table {table_name}: {e}")
             result.error_message = str(e)
-            end_time = datetime.now()
+            end_time = datetime.now(timezone.utc)
             result.duration_seconds = (end_time - start_time).total_seconds()
         
         return result

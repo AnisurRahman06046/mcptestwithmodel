@@ -4,6 +4,7 @@ from src.models.api import (
     UserTokenInfo, SubscriptionInfo
 )
 from src.services.query_processor import query_processor
+from src.services.llm_query_processor import llm_query_processor
 from src.services.auth_service import auth_service
 from src.services.token_service import token_service
 from src.services.subscription_service import subscription_service
@@ -107,10 +108,29 @@ async def process_query(
 
     try:
 
-        # Step 5: Process the query using the query processor with context
-        result = await query_processor.process_query(
-            query=request.query,
-            context=context.dict()
+        # Step 5: Process the query using appropriate processor
+        # Determine whether to use LLM or pattern-based processor
+        use_llm = getattr(request, "use_llm", True)  # Default to LLM for intelligence
+
+        # Only use pattern-based for very simple greetings to save resources
+        if use_llm:
+            query_lower = request.query.lower()
+            # Use pattern-based ONLY for simple greetings
+            simple_greetings = ["hi", "hello", "hey", "good morning", "good afternoon", "good evening"]
+            if query_lower.strip() in simple_greetings:
+                use_llm = False  # Use pattern-based for simple greetings
+
+        if use_llm:
+            logger.info("Using LLM-driven query processor")
+            result = await llm_query_processor.process_query(
+                query=request.query,
+                context=context.model_dump()
+            )
+        else:
+            logger.info("Using pattern-based query processor")
+            result = await query_processor.process_query(
+                query=request.query,
+                context=context.model_dump()
         )
         
         # Step 4: Process successful query response and update token usage
@@ -180,7 +200,7 @@ async def process_query(
                 tokens_used=actual_tokens_used,
                 execution_time_ms=result["metadata"]["execution_time_ms"],
                 model_used=result["metadata"].get("model_used"),
-                structured_data=structured_data.dict() if structured_data else None,
+                structured_data=structured_data.model_dump() if structured_data else None,
                 metadata=result.get("debug", {})
             )
 

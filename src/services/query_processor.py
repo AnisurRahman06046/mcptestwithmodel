@@ -51,6 +51,14 @@ class QueryProcessor:
                 r"how (much|many).*(sold|sales?|revenue)",
                 r"total (sales?|revenue|earnings?)"
             ],
+            "product_inquiry": [
+                r"how (many|much) products?",
+                r"products?.*(have|total|count)",
+                r"(list|show|get).*(products?)",
+                r"products?.*(price|cost|expensive|cheap)",
+                r"highest.*price|most expensive|cheapest",
+                r"product.*(info|details|data|catalog)"
+            ],
             "inventory_inquiry": [
                 r"inventory|stock|out of stock|low stock",
                 r"how (much|many).*(inventory|stock|available)",
@@ -86,6 +94,8 @@ class QueryProcessor:
                 r"last (\d+) days?": ("days", None),
                 r"past (\d+) (weeks?|months?)": ("period", None)
             },
+            # Default product patterns - these help identify common product mentions
+            # In a production system, these could be dynamically loaded from the database
             "products": [
                 r"shirt|t-shirt|tee",
                 r"jeans|pants|trousers",
@@ -93,6 +103,8 @@ class QueryProcessor:
                 r"laptop|computer|macbook",
                 r"shoes|sneakers|footwear"
             ],
+            # Default category patterns - these help classify product categories
+            # These patterns work as fallbacks for common category names
             "categories": [
                 r"electronics?",
                 r"clothing|apparel|fashion",
@@ -274,6 +286,15 @@ class QueryProcessor:
             
             tool_calls.append({"tool": "get_sales_data", "parameters": params})
         
+        elif intent == "product_inquiry":
+            params = base_params.copy()
+            if "product" in entities:
+                params["product"] = entities["product"]
+            if "category" in entities:
+                params["category"] = entities["category"]
+
+            tool_calls.append({"tool": "get_product_data", "parameters": params})
+
         elif intent == "inventory_inquiry":
             params = base_params.copy()
             if "product" in entities:
@@ -282,7 +303,7 @@ class QueryProcessor:
                 params["category"] = entities["category"]
             if "numbers" in entities:
                 params["low_stock_threshold"] = entities["numbers"][0]
-            
+
             tool_calls.append({"tool": "get_inventory_status", "parameters": params})
         
         elif intent == "customer_inquiry":
@@ -388,8 +409,15 @@ class QueryProcessor:
         try:
             logger.info(f"Starting model inference with active model: {model_manager.active_model}")
             # Optimize token count based on intent for faster responses
-            max_tokens = 30 if intent in ["greeting", "general_conversation"] else 100
-            temperature = 0.5 if intent in ["greeting", "general_conversation"] else 0.3
+            if intent in ["greeting", "general_conversation"]:
+                max_tokens = 30
+                temperature = 0.5
+            elif intent in ["product_inquiry", "inventory_inquiry"]:
+                max_tokens = 50  # Short factual responses
+                temperature = 0.2
+            else:
+                max_tokens = 80  # Moderate length for other queries
+                temperature = 0.3
             result = model_manager.inference(prompt, max_tokens=max_tokens, temperature=temperature)
             logger.info("Model inference completed successfully")
             
@@ -472,6 +500,12 @@ class QueryProcessor:
         # Add data summary
         if successful_results:
             context_parts.append(f"Data available: {json.dumps(successful_results, indent=2)}")
+        else:
+            # If no successful results, check for errors
+            failed_tools = [r for r in tool_results if not r.get('success')]
+            if failed_tools:
+                context_parts.append("IMPORTANT: Data retrieval failed. No actual data is available.")
+                context_parts.append("You MUST inform the user that the data could not be retrieved.")
         
         context = "\n".join(context_parts)
         
@@ -492,33 +526,65 @@ Response:"""
 User Question: {query}
 
 Instructions:
-- Answer directly and concisely based ONLY on the provided data
-- Use ONLY the specific numbers from the data - do NOT make up or estimate any numbers
-- If data shows zeros or empty results, clearly state "no data available for this period"
-- Be conversational but professional
-- Focus on actionable insights when data is available
-- Keep response under 100 words
+- Give a SHORT, DIRECT answer in 1-2 sentences maximum
+- State the main fact ONCE - do NOT repeat the same information
+- Use ONLY the specific numbers from the data
+- STOP after answering - do NOT continue or elaborate
+- Example good answer: "You have 107 products with prices ranging from $3 to $100,000."
+- Example bad answer: "You have 107 products. Based on the data, there are 107 products. The total is 107 products."
 
 Answer:"""
         
         return prompt
     
     def _clean_model_response(self, response: str) -> str:
-        """Clean up model response"""
+        """Clean up model response - remove repetition and artifacts"""
         # Remove common model artifacts
         response = response.strip()
-        
-        # Remove any prompt echoes or instruction repetition
-        lines = response.split('\n')
-        cleaned_lines = []
-        
-        for line in lines:
-            line = line.strip()
-            if line and not line.startswith('User Question:') and not line.startswith('Instructions:'):
-                cleaned_lines.append(line)
-        
-        cleaned_response = ' '.join(cleaned_lines)
-        
+
+        # Split into sentences
+        import re
+        sentences = re.split(r'(?<=[.!?])\s+', response)
+
+        # Remove duplicate/similar sentences
+        seen_sentences = []
+        unique_sentences = []
+
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if not sentence:
+                continue
+
+            # Skip prompt echoes
+            if sentence.startswith(('User Question:', 'Instructions:', 'Query:', 'Context:')):
+                continue
+
+            # Check if this sentence is too similar to ones we've seen
+            is_duplicate = False
+            sentence_lower = sentence.lower()
+
+            for seen in seen_sentences:
+                # Check for exact duplicates or very similar sentences
+                if (seen == sentence_lower or
+                    sentence_lower.startswith(seen[:20]) or  # Same beginning
+                    seen.startswith(sentence_lower[:20])):   # Same beginning
+                    is_duplicate = True
+                    break
+
+            if not is_duplicate and sentence:
+                unique_sentences.append(sentence)
+                seen_sentences.append(sentence_lower)
+
+                # Stop if we have a complete answer (avoid repetition)
+                if len(unique_sentences) >= 2 and sentence.endswith('.'):
+                    # Check if we have a complete thought
+                    combined = ' '.join(unique_sentences)
+                    if ('have' in combined or 'are' in combined or 'total' in combined) and \
+                       any(char.isdigit() for char in combined):
+                        break
+
+        cleaned_response = ' '.join(unique_sentences)
+
         # Remove any remaining artifacts
         artifacts = [
             "Answer:", "Response:", "Based on the data:",

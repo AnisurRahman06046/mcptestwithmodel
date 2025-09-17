@@ -38,7 +38,7 @@ class ConversationService:
 
             # Insert into database
             await mongodb_client.database.conversations.insert_one(
-                conversation.dict(by_alias=True)
+                conversation.model_dump(by_alias=True)
             )
 
             logger.info(f"Created new conversation {conversation.conversation_id} for user {user_id}")
@@ -107,7 +107,7 @@ class ConversationService:
 
             # Insert message
             await mongodb_client.database.conversation_messages.insert_one(
-                message.dict(by_alias=True)
+                message.model_dump(by_alias=True)
             )
 
             # Update conversation statistics

@@ -124,12 +124,14 @@ class RealModelManager:
                 if LLAMA_CPP_AVAILABLE:
                     # Load real model using llama-cpp-python
                     n_gpu_layers = config["n_gpu_layers"]
-                    logger.info(f"Attempting to load with config: n_ctx={config['context_size']}, n_gpu_layers={n_gpu_layers}")
+                    # Increase context size to handle larger queries
+                    context_size = max(config['context_size'], 32768)  # Use at least 32k context
+                    logger.info(f"Attempting to load with config: n_ctx={context_size}, n_gpu_layers={n_gpu_layers}")
 
                     try:
                         model = Llama(
                             model_path=str(model_path),
-                            n_ctx=config["context_size"],
+                            n_ctx=context_size,
                             n_threads=getattr(settings, 'MODEL_THREADS', 6),
                             n_gpu_layers=n_gpu_layers,
                             verbose=False,  # Reduce verbosity for performance

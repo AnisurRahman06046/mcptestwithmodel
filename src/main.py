@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from src.config import settings
 from src.core.events import lifespan, configure_startup_tasks, configure_shutdown_tasks
-from src.api.routes import query, models, tools, health, sync, subscription, conversations, enhancement
+from src.api.routes import query, models, tools, health, sync, subscription, conversations, enhancement, chat
 import uvicorn
 
 # Configure logging
@@ -71,6 +71,7 @@ app.include_router(models.router, prefix="/models", tags=["Models"])
 app.include_router(tools.router, prefix="/tools", tags=["Tools"])
 app.include_router(sync.router, prefix="/sync", tags=["Sync"])
 app.include_router(enhancement.router, prefix="", tags=["Enhancement"])
+app.include_router(chat.router, prefix="/api/v1", tags=["Chat"])
 
 
 @app.get("/")

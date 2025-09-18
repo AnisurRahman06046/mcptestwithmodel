@@ -62,6 +62,9 @@ class Settings(BaseSettings):
     SYNC_AUTO_START: bool = False
     SYNC_TABLES: Optional[str] = None  # Comma-separated table names
     USE_DYNAMIC_SYNC: bool = True  # Use schema-less dynamic sync
+
+    # Query Processor Settings
+    USE_UNIVERSAL_PROCESSOR: bool = True  # Use universal query builder instead of specific tools
     
     class Config:
         env_file = ".env"

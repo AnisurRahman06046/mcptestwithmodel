@@ -5,10 +5,12 @@ from src.models.api import (
 )
 from src.services.query_processor import query_processor
 from src.services.llm_query_processor import llm_query_processor
+from src.services.universal_llm_processor import universal_llm_processor
 from src.services.auth_service import auth_service
 from src.services.token_service import token_service
 from src.services.subscription_service import subscription_service
 from src.services.conversation_service import conversation_service
+from src.config.settings import settings
 import logging
 
 router = APIRouter()
@@ -109,29 +111,41 @@ async def process_query(
     try:
 
         # Step 5: Process the query using appropriate processor
-        # Determine whether to use LLM or pattern-based processor
-        use_llm = getattr(request, "use_llm", True)  # Default to LLM for intelligence
+        # Check for processor selection via settings
+        use_universal = settings.USE_UNIVERSAL_PROCESSOR
 
-        # Only use pattern-based for very simple greetings to save resources
-        if use_llm:
-            query_lower = request.query.lower()
-            # Use pattern-based ONLY for simple greetings
-            simple_greetings = ["hi", "hello", "hey", "good morning", "good afternoon", "good evening"]
-            if query_lower.strip() in simple_greetings:
-                use_llm = False  # Use pattern-based for simple greetings
+        # Allow override via request option
+        if hasattr(request, "processor"):
+            if request.processor == "universal":
+                use_universal = True
+            elif request.processor == "specific":
+                use_universal = False
 
-        if use_llm:
-            logger.info("Using LLM-driven query processor")
-            result = await llm_query_processor.process_query(
+        # Determine processor to use
+        query_lower = request.query.lower()
+        simple_greetings = ["hi", "hello", "hey", "good morning", "good afternoon", "good evening"]
+
+        if query_lower.strip() in simple_greetings:
+            # Use pattern-based for simple greetings
+            logger.info("Using pattern-based query processor for greeting")
+            result = await query_processor.process_query(
+                query=request.query,
+                context=context.model_dump()
+            )
+        elif use_universal:
+            # Use the new universal processor
+            logger.info("Using UNIVERSAL LLM query processor")
+            result = await universal_llm_processor.process_query(
                 query=request.query,
                 context=context.model_dump()
             )
         else:
-            logger.info("Using pattern-based query processor")
-            result = await query_processor.process_query(
+            # Use the original LLM processor with specific tools
+            logger.info("Using specific-tools LLM query processor")
+            result = await llm_query_processor.process_query(
                 query=request.query,
                 context=context.model_dump()
-        )
+            )
         
         # Step 4: Process successful query response and update token usage
         if result["success"]:

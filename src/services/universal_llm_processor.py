@@ -306,9 +306,15 @@ Now extract date from the query above. Return ONLY JSON or null:"""
         """
         Use LLM to process the complete datasets and answer the query
         """
+        query_lower = query.lower()
 
-        # Get full data for LLM processing
-        full_data_for_llm = self._prepare_full_data_for_llm(all_data)
+        # Intelligently prepare data based on query type to avoid token limits
+        if "active" in query_lower and "product" in query_lower:
+            # For active products queries, only send essential data
+            full_data_for_llm = self._prepare_minimal_data_for_active_products(all_data)
+        else:
+            # Get full data for other queries
+            full_data_for_llm = self._prepare_full_data_for_llm(all_data)
 
         # Log the size of data being sent
         import sys
@@ -317,9 +323,10 @@ Now extract date from the query above. Return ONLY JSON or null:"""
         estimated_tokens = len(data_str) // 4  # Rough estimate: 4 chars per token
         logger.info(f"Sending data to LLM - Size: {data_size} bytes, Estimated tokens: {estimated_tokens}")
 
-        if estimated_tokens > 30000:
+        if estimated_tokens > 10000:  # Reduced from 30000 to ensure LLM can process
             logger.warning(f"Data too large ({estimated_tokens} tokens), using fallback")
-            return self._create_enhanced_fallback(query, all_data)
+            # Pass the prepared data with product_status_distribution to fallback
+            return self._create_enhanced_fallback(query, all_data, full_data_for_llm)
 
         prompt = f"""Analyze the data and answer the query with a natural language response. Return ONLY JSON, no explanations.
 
@@ -328,18 +335,34 @@ Query: {query}
 Data:
 {json.dumps(full_data_for_llm, indent=2, default=str)}
 
-Analyze the data above and answer the query. Look for:
-- For sales: Check statistics.total_revenue and total_orders
-- For products: Check statistics.total_products or product_status_distribution
-- For date ranges: Check the date_range in statistics
+CRITICAL INSTRUCTIONS FOR ANSWERING:
 
-IMPORTANT: Always provide a complete, natural language answer. Examples:
-- Instead of "0" say "You don't have any orders today."
-- Instead of "5" say "You have 5 products in your store."
-- Instead of "100.50" say "Your total revenue is $100.50."
-- For zero results, be conversational: "You don't have any..." or "There are no..."
+1. For "active products" or "products that are active":
+   - ALWAYS use product_status_distribution.active (NOT products_in_stock)
+   - Active products = products with status field = "active"
+   - Example: If product_status_distribution.active = 102, answer "You have 102 active products"
 
-CRITICAL: Return ONLY this JSON format, nothing else:
+2. For "products in stock" or "available inventory":
+   - Use statistics.products_in_stock
+   - This is about inventory quantity, NOT product status
+
+3. For "total products":
+   - Use statistics.total_products or all_products_count
+
+4. For sales/revenue:
+   - Use statistics.total_revenue and statistics.total_orders
+
+IMPORTANT DISTINCTIONS:
+- "active products" ≠ "products in stock"
+- product_status_distribution shows counts by status (active, inactive, draft)
+- products_in_stock shows products with inventory > 0
+
+ANSWER FORMAT:
+- Be conversational and natural
+- For zero: "You don't have any..." instead of "0"
+- Include units: "102 active products", "$X in sales"
+
+Return ONLY this JSON:
 {{
     "answer": "your natural language answer here",
     "intent": "sales_inquiry or product_inquiry or other",
@@ -366,7 +389,7 @@ CRITICAL: Return ONLY this JSON format, nothing else:
 
             if not parsed.get("answer") or parsed.get("answer") == "I found the following information: ":
                 logger.warning("LLM failed to provide proper answer, using enhanced fallback")
-                return self._create_enhanced_fallback(query, all_data)
+                return self._create_enhanced_fallback(query, all_data, full_data_for_llm)
 
             return {
                 "answer": parsed["answer"],
@@ -407,6 +430,33 @@ CRITICAL: Return ONLY this JSON format, nothing else:
 
         return summary
 
+    def _prepare_minimal_data_for_active_products(self, all_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Prepare minimal data specifically for active products queries to avoid token limits
+        """
+        prepared = {}
+
+        for domain, data in all_data.items():
+            if domain == "products":
+                # Only include essential data for active products query
+                all_products = data.get("products", [])
+
+                # Count status distribution
+                status_counts = {}
+                for prod in all_products:
+                    status = str(prod.get("status", "unknown")).lower()
+                    status_counts[status] = status_counts.get(status, 0) + 1
+
+                prepared[domain] = {
+                    "statistics": data.get("statistics", {}),
+                    "product_status_distribution": status_counts,
+                    "ACTIVE_PRODUCTS_COUNT": status_counts.get("active", 0),
+                    "total_products": len(all_products),
+                    "NOTE": "Use ACTIVE_PRODUCTS_COUNT for 'active products' queries"
+                }
+
+        return prepared
+
     def _prepare_full_data_for_llm(self, all_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Prepare full datasets for LLM processing
@@ -421,23 +471,29 @@ CRITICAL: Return ONLY this JSON format, nothing else:
 
             # Include key data based on domain
             if domain == "products":
-                # Include all products and SKUs for price calculations
-                products = data.get("products", [])[:500]  # Limit to 500
-                # Include first few products as sample to show structure
-                domain_data["sample_products"] = products[:5] if products else []
-                domain_data["all_products_count"] = len(data.get("products", []))
+                # IMPORTANT: Minimize data to avoid token limit (was causing fallback at 39k tokens)
+                all_products = data.get("products", [])
 
-                # Add product status distribution
-                if products:
+                # Only include 3 sample products to show structure (was 500!)
+                domain_data["sample_products"] = all_products[:3] if all_products else []
+                domain_data["all_products_count"] = len(all_products)
+
+                # Add product status distribution with clear labeling
+                if all_products:
                     status_counts = {}
-                    for prod in data.get("products", []):
+                    for prod in all_products:
                         status = str(prod.get("status", "unknown")).lower()
                         status_counts[status] = status_counts.get(status, 0) + 1
                     domain_data["product_status_distribution"] = status_counts
 
-                domain_data["skus"] = data.get("skus", [])[:100]  # Reduce for token limits
-                domain_data["categories"] = data.get("categories", [])[:20]
-                domain_data["brands"] = data.get("brands", [])[:20]
+                    # Add explicit active products count for clarity
+                    domain_data["ACTIVE_PRODUCTS_COUNT"] = status_counts.get("active", 0)
+                    domain_data["IMPORTANT_NOTE"] = "ACTIVE_PRODUCTS_COUNT is for 'active products' queries"
+
+                # Drastically reduce other data to stay under token limit
+                domain_data["skus"] = data.get("skus", [])[:5]  # Was 100, now just 5 samples
+                domain_data["categories"] = data.get("categories", [])[:5]  # Was 20
+                domain_data["brands"] = data.get("brands", [])[:5]  # Was 20
                 if "product_sales" in data:
                     domain_data["product_sales"] = data["product_sales"][:20]
 
@@ -468,21 +524,34 @@ CRITICAL: Return ONLY this JSON format, nothing else:
         """
         Create a fallback answer when LLM processing fails
         """
-        return self._create_enhanced_fallback(query, all_data)
+        # Prepare data first to get product_status_distribution
+        prepared_data = self._prepare_full_data_for_llm(all_data)
+        return self._create_enhanced_fallback(query, all_data, prepared_data)
 
-    def _create_enhanced_fallback(self, query: str, all_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _create_enhanced_fallback(self, query: str, all_data: Dict[str, Any], prepared_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Create an enhanced fallback answer using a simplified LLM prompt when full data is too large
         """
         query_lower = query.lower()
+        logger.info(f"Using enhanced fallback for query: {query}")
+
+        # Use prepared_data if available, otherwise prepare it
+        if prepared_data is None:
+            prepared_data = self._prepare_full_data_for_llm(all_data)
 
         # First, try to use LLM with just statistics for natural language response
         try:
-            # Extract just the statistics from all domains
+            # For active products queries, include the product_status_distribution
             stats_summary = {}
             for domain, data in all_data.items():
                 if "statistics" in data:
                     stats_summary[domain] = data["statistics"]
+
+            # Add product_status_distribution from prepared_data if available
+            if "active" in query_lower and "product" in query_lower:
+                if "products" in prepared_data and "product_status_distribution" in prepared_data["products"]:
+                    stats_summary["product_status_distribution"] = prepared_data["products"]["product_status_distribution"]
+                    logger.info(f"Added product_status_distribution to stats: {stats_summary['product_status_distribution']}")
 
             # Create a simplified prompt with just statistics
             stats_prompt = f"""Answer this query with a complete, natural language response.
@@ -492,10 +561,15 @@ Query: {query}
 Available Statistics:
 {json.dumps(stats_summary, indent=2, default=str)}
 
-IMPORTANT: Provide a conversational, natural language answer:
-- For zero values: "You don't have any..." instead of "0"
-- For single items: "You have 1 product" instead of "1"
-- Include units: "$X for revenue", "X products", "X orders"
+CRITICAL: How to answer different queries:
+1. "How many active products?" → Use product_status_distribution.active (NOT products_in_stock!)
+2. "How many products in stock?" → Use products.products_in_stock
+3. "Total products?" → Use products.total_products
+
+REMEMBER:
+- Active products = products with status="active" (use product_status_distribution.active)
+- Products in stock = products with inventory > 0 (use products_in_stock)
+- These are DIFFERENT things!
 
 Return ONLY JSON:
 {{
@@ -510,12 +584,28 @@ Return ONLY JSON:
                 parsed = safe_parse_llm_json(response_text)
 
                 if parsed and parsed.get("answer"):
-                    return {
-                        "answer": parsed["answer"],
-                        "intent": parsed.get("intent", "general"),
-                        "confidence": parsed.get("confidence", 0.8),
-                        "structured_data": None
-                    }
+                    # Double-check for active products queries
+                    if "active" in query_lower and "product" in query_lower:
+                        # If LLM says 0 but we have active products, override
+                        if "product_status_distribution" in stats_summary:
+                            active_count = stats_summary["product_status_distribution"].get("active", 0)
+                            if active_count > 0 and ("0" in parsed["answer"] or "don't have any" in parsed["answer"].lower()):
+                                logger.warning(f"LLM said 0 active products but we have {active_count}, overriding")
+                                # Fall through to pattern matching
+                            else:
+                                return {
+                                    "answer": parsed["answer"],
+                                    "intent": parsed.get("intent", "general"),
+                                    "confidence": parsed.get("confidence", 0.8),
+                                    "structured_data": None
+                                }
+                    else:
+                        return {
+                            "answer": parsed["answer"],
+                            "intent": parsed.get("intent", "general"),
+                            "confidence": parsed.get("confidence", 0.8),
+                            "structured_data": None
+                        }
         except Exception as e:
             logger.warning(f"LLM fallback failed: {e}, using pattern matching")
 
@@ -525,18 +615,40 @@ Return ONLY JSON:
 
         # Handle "active products" query
         if "active" in query_lower and "product" in query_lower:
-            for domain, data in all_data.items():
-                if domain == "products" and "products" in data:
-                    products_list = data.get("products", [])
-                    # Count active products (status = 'active' or status = '1' or status = 1)
-                    active_count = 0
-                    for product in products_list:
-                        status = str(product.get("status", "")).lower()
-                        if status in ["active", "1", "true"]:
-                            active_count += 1
-                    answer = f"There are {active_count} active products in the store."
-                    intent = "product_inquiry"
-                    break
+            # Use prepared_data which has product_status_distribution
+            for domain, data in prepared_data.items():
+                if domain == "products":
+                    # First try to get from product_status_distribution if available
+                    if "product_status_distribution" in data:
+                        active_count = data["product_status_distribution"].get("active", 0)
+                        if active_count == 0:
+                            answer = "You have 0 active products."
+                        elif active_count == 1:
+                            answer = "You have 1 active product."
+                        else:
+                            answer = f"You have {active_count} active products."
+                        intent = "product_inquiry"
+                        break
+            # If not found in prepared_data, try raw data
+            if not answer:
+                for domain, data in all_data.items():
+                    if domain == "products" and "products" in data:
+                        products_list = data.get("products", [])
+                        # Count active products (status = 'active' or status = '1' or status = 1)
+                        active_count = 0
+                        for product in products_list:
+                            status = str(product.get("status", "")).lower()
+                            if status in ["active", "1", "true"]:
+                                active_count += 1
+
+                        if active_count == 0:
+                            answer = "You have 0 active products."
+                        elif active_count == 1:
+                            answer = "You have 1 active product."
+                        else:
+                            answer = f"You have {active_count} active products."
+                        intent = "product_inquiry"
+                        break
 
         # Handle general product count
         elif "how many" in query_lower and "product" in query_lower:

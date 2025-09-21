@@ -15,7 +15,7 @@ class AuthService:
     """Service for validating tokens and extracting user context."""
     
     def __init__(self):
-        self.platform_api_url = "https://api.storx.site/api/v1/auth/validate-token"
+        self.platform_api_url = "https://api.bitcommerz.com/api/v1/auth/validate-token"
         self.timeout = 10.0  # 10 seconds timeout
     
     async def validate_token(self, token: str) -> Dict[str, Any]:

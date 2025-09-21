@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>StorX AI Chat - Testing Interface</title>
+    <title>BitCommerz AI Assistant - Testing Interface</title>
     <style>
         * {
             margin: 0;
@@ -272,7 +272,7 @@
 <body>
     <div class="chat-container">
         <div class="chat-header">
-            <h1>StorX AI Assistant</h1>
+            <h1>BitCommerz AI Assistant</h1>
             <div class="settings">
                 <label>Shop:</label>
                 <div class="shop-selector">
@@ -293,7 +293,7 @@
                 <div>
                     <div class="message-label">Assistant</div>
                     <div class="message-content">
-                        Hello! I'm your StorX AI assistant. Ask me anything about your store data - products, sales, inventory, customers, or any other metrics!
+                        Hello! I'm your BitCommerz AI assistant. Ask me anything about your store data - products, sales, inventory, customers, or any other metrics!
                     </div>
                 </div>
             </div>
@@ -320,7 +320,7 @@
 
     <script>
         // Configuration
-        const API_URL = 'http://localhost:8000/api/v1/chat';
+        const API_URL = 'http://localhost:8000/api/v1/chat/enhanced';
         const SHOPS_API_URL = 'http://localhost:8000/api/v1/chat/shops';
 
         // State
@@ -486,13 +486,16 @@
         }
 
         // Send message
-        async function sendMessage() {
-            const message = messageInput.value.trim();
-            if (!message || isProcessing) return;
+        async function sendMessage(message = null, isDisambiguation = false, originalQuery = null, selectedIntent = null) {
+            message = message || messageInput.value.trim();
+            if (!message && !isDisambiguation) return;
+            if (isProcessing) return;
 
-            // Add user message
-            addMessage(message, true);
-            messageInput.value = '';
+            // Add user message if not disambiguation
+            if (!isDisambiguation) {
+                addMessage(message, true);
+                messageInput.value = '';
+            }
 
             // Disable input
             isProcessing = true;
@@ -500,23 +503,38 @@
             setTyping(true);
 
             try {
+                let requestBody = {
+                    shop_id: selectedShopId,
+                    conversation_id: conversationId
+                };
+
+                if (isDisambiguation) {
+                    requestBody.query = '';
+                    requestBody.selected_intent = selectedIntent;
+                    requestBody.original_query = originalQuery;
+                } else {
+                    requestBody.query = message;
+                }
+
                 const response = await fetch(API_URL, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({
-                        query: message,
-                        shop_id: selectedShopId,
-                        conversation_id: conversationId
-                    })
+                    body: JSON.stringify(requestBody)
                 });
 
                 const data = await response.json();
 
                 if (data.success) {
                     conversationId = data.conversation_id;
-                    addMessage(data.response, false, data.metadata);
+
+                    // Handle disambiguation
+                    if (data.needs_clarification) {
+                        handleDisambiguation(data);
+                    } else {
+                        addMessage(data.response, false, data.metadata);
+                    }
                 } else {
                     addMessage(
                         data.response || 'Sorry, I encountered an error processing your request.',
@@ -539,6 +557,70 @@
                 sendButton.disabled = false;
                 messageInput.focus();
             }
+        }
+
+        // Handle disambiguation response
+        function handleDisambiguation(data) {
+            const disambiguationDiv = document.createElement('div');
+            disambiguationDiv.className = 'message assistant';
+
+            let optionsHtml = '';
+            data.options.forEach((option, index) => {
+                optionsHtml += `
+                    <button class="disambiguation-button"
+                            data-intent="${option.intent}"
+                            data-original="${data.metadata.original_query}"
+                            style="display: block; margin: 5px 0; padding: 10px 15px;
+                                   background: white; border: 2px solid #667eea;
+                                   border-radius: 10px; cursor: pointer; width: 100%;
+                                   text-align: left; transition: all 0.2s;">
+                        ${index + 1}. ${option.description}
+                    </button>
+                `;
+            });
+
+            disambiguationDiv.innerHTML = `
+                <div>
+                    <div class="message-label">Assistant</div>
+                    <div class="message-content">
+                        <div>${data.question}</div>
+                        <div style="margin-top: 10px;">
+                            ${optionsHtml}
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            chatMessages.appendChild(disambiguationDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+
+            // Add event listeners to buttons
+            const buttons = disambiguationDiv.querySelectorAll('.disambiguation-button');
+            buttons.forEach(button => {
+                button.addEventListener('click', function() {
+                    const intent = this.getAttribute('data-intent');
+                    const original = this.getAttribute('data-original');
+
+                    // Add user's selection as a message
+                    addMessage(`Selected: ${this.textContent}`, true);
+
+                    // Disable all buttons
+                    buttons.forEach(b => b.disabled = true);
+
+                    // Send disambiguation response
+                    sendMessage(null, true, original, intent);
+                });
+
+                button.addEventListener('mouseenter', function() {
+                    this.style.background = 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)';
+                    this.style.color = 'white';
+                });
+
+                button.addEventListener('mouseleave', function() {
+                    this.style.background = 'white';
+                    this.style.color = 'black';
+                });
+            });
         }
 
         // Event listeners

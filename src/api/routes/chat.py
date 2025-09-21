@@ -234,10 +234,14 @@ async def serve_chat_ui():
         with open(html_file_path, "r", encoding="utf-8") as f:
             html_content = f.read()
 
-        # Update the API URL to use relative path for same-origin requests
+        # Update the API URLs to use relative paths for same-origin requests
         html_content = html_content.replace(
-            "const API_URL = 'http://localhost:8000/api/v1/chat';",
-            "const API_URL = '/api/v1/chat';"
+            "const API_URL = 'http://localhost:8000/api/v1/chat/enhanced';",
+            "const API_URL = '/api/v1/chat/enhanced';"
+        )
+        html_content = html_content.replace(
+            "const SHOPS_API_URL = 'http://localhost:8000/api/v1/chat/shops';",
+            "const SHOPS_API_URL = '/api/v1/chat/shops';"
         )
 
         return HTMLResponse(content=html_content)

@@ -43,6 +43,11 @@ class UniversalLLMProcessor:
             domains_needed = await self._identify_domains(query)
             logger.info(f"Domains identified for query: {domains_needed}")
 
+            # If no domains are needed (e.g., greeting), handle it directly
+            if not domains_needed:
+                logger.info("No domains needed - handling as conversational query")
+                return await self._handle_conversational_query(query)
+
             # Step 2: Extract date range using LLM (handles ANY date expression)
             date_range = await self._llm_extract_date_range(query)
             if date_range:
@@ -116,12 +121,18 @@ Query: "{query}"
 
 Available domains: products, sales, inventory, customers, orders
 
+IMPORTANT: If the query is a greeting (hi, hello, hey, etc.) or general conversation that doesn't ask for specific data, return an empty array [].
+
 Return ONLY a JSON array of domain names. No explanations.
 
 Examples:
 "How many products?" → ["products"]
 "July revenue" → ["sales"]
 "Best selling products" → ["products", "sales"]
+"Hi" → []
+"Hello there" → []
+"How are you?" → []
+"Thank you" → []
 
 Now classify the query above:"""
 
@@ -312,6 +323,9 @@ Now extract date from the query above. Return ONLY JSON or null:"""
         if "active" in query_lower and "product" in query_lower:
             # For active products queries, only send essential data
             full_data_for_llm = self._prepare_minimal_data_for_active_products(all_data)
+        elif "categor" in query_lower:
+            # For category queries, include all categories
+            full_data_for_llm = self._prepare_category_focused_data(all_data)
         else:
             # Get full data for other queries
             full_data_for_llm = self._prepare_full_data_for_llm(all_data)
@@ -335,37 +349,38 @@ Query: {query}
 Data:
 {json.dumps(full_data_for_llm, indent=2, default=str)}
 
-CRITICAL INSTRUCTIONS FOR ANSWERING:
+INSTRUCTIONS FOR ANSWERING:
 
-1. For "active products" or "products that are active":
-   - ALWAYS use product_status_distribution.active (NOT products_in_stock)
-   - Active products = products with status field = "active"
-   - Example: If product_status_distribution.active = 102, answer "You have 102 active products"
+1. READ THE QUERY CAREFULLY - Answer what is actually being asked, not what you assume
 
-2. For "products in stock" or "available inventory":
-   - Use statistics.products_in_stock
-   - This is about inventory quantity, NOT product status
+2. For listing items (e.g., "list 5 categories", "show me products"):
+   - Extract and list the requested items from the data
+   - Look at actual product data to find unique categories, names, etc.
+   - Format as a numbered list or bullet points as appropriate
 
-3. For "total products":
-   - Use statistics.total_products or all_products_count
+3. For counting queries:
+   - "active products": Use product_status_distribution.active
+   - "products in stock": Use statistics.products_in_stock
+   - "total products": Use statistics.total_products
 
 4. For sales/revenue:
    - Use statistics.total_revenue and statistics.total_orders
 
-IMPORTANT DISTINCTIONS:
-- "active products" ≠ "products in stock"
-- product_status_distribution shows counts by status (active, inactive, draft)
-- products_in_stock shows products with inventory > 0
+5. For category-related queries:
+   - For "total categories" or "how many categories": Use statistics.total_categories (from category collection)
+   - For listing categories: Use the categories array or unique_categories
+   - Note: statistics.total_categories is the authoritative count
 
 ANSWER FORMAT:
 - Be conversational and natural
-- For zero: "You don't have any..." instead of "0"
-- Include units: "102 active products", "$X in sales"
+- For lists: Use numbered or bullet format
+- For counts: Include units (e.g., "102 active products")
+- For zero: Say "You don't have any..." instead of "0"
 
 Return ONLY this JSON:
 {{
     "answer": "your natural language answer here",
-    "intent": "sales_inquiry or product_inquiry or other",
+    "intent": "listing or counting or sales_inquiry or product_inquiry or other",
     "confidence": 0.9
 }}"""
 
@@ -429,6 +444,66 @@ Return ONLY this JSON:
             summary[domain] = domain_summary
 
         return summary
+
+    def _prepare_category_focused_data(self, all_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Prepare data focused on categories for category-related queries
+        """
+        prepared = {}
+
+        for domain, data in all_data.items():
+            if domain == "products":
+                domain_data = {
+                    "statistics": data.get("statistics", {})
+                }
+
+                # Include ALL categories for category queries
+                domain_data["categories"] = data.get("categories", [])
+
+                # Get unique categories from products
+                all_products = data.get("products", [])
+                unique_categories = set()
+                category_product_count = {}
+
+                for prod in all_products:
+                    category = prod.get("category")
+                    if category:
+                        unique_categories.add(category)
+                        category_product_count[category] = category_product_count.get(category, 0) + 1
+
+                domain_data["unique_categories"] = list(unique_categories)
+                domain_data["category_product_counts"] = category_product_count
+                domain_data["total_unique_categories"] = len(unique_categories)
+
+                # IMPORTANT: Ensure statistics.total_categories is set correctly
+                if "statistics" not in domain_data:
+                    domain_data["statistics"] = {}
+                domain_data["statistics"]["total_categories"] = len(data.get("categories", []))
+
+                # Log the actual counts for debugging
+                logger.info(f"Category data prepared - Collection count: {len(data.get('categories', []))}, "
+                           f"Unique from products: {len(unique_categories)}")
+
+                # Include a few sample products per category (max 2 per category)
+                samples_by_category = {}
+                for prod in all_products[:50]:  # Look at first 50 products for samples
+                    category = prod.get("category")
+                    if category:
+                        if category not in samples_by_category:
+                            samples_by_category[category] = []
+                        if len(samples_by_category[category]) < 2:
+                            samples_by_category[category].append({
+                                "name": prod.get("name"),
+                                "sku": prod.get("sku"),
+                                "price": prod.get("price")
+                            })
+
+                domain_data["sample_products_by_category"] = samples_by_category
+                prepared[domain] = domain_data
+            else:
+                prepared[domain] = {"statistics": data.get("statistics", {})}
+
+        return prepared
 
     def _prepare_minimal_data_for_active_products(self, all_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -527,6 +602,61 @@ Return ONLY this JSON:
         # Prepare data first to get product_status_distribution
         prepared_data = self._prepare_full_data_for_llm(all_data)
         return self._create_enhanced_fallback(query, all_data, prepared_data)
+
+    async def _handle_conversational_query(self, query: str) -> Dict[str, Any]:
+        """
+        Handle conversational queries like greetings without fetching data
+        """
+        prompt = f"""You are a helpful assistant for an e-commerce platform. Respond naturally to this query.
+
+Query: "{query}"
+
+Provide a friendly, helpful response. Be concise but warm.
+
+Return your response as JSON with the following structure:
+{{
+    "answer": "Your natural language response here",
+    "intent": "greeting/help/general",
+    "confidence": 0.95
+}}"""
+
+        try:
+            if model_manager.auto_load_best_model(query):
+                result = model_manager.inference(prompt, max_tokens=100, temperature=0.7)
+                response_text = result.get("text", "").strip()
+
+                # Try to parse as JSON
+                try:
+                    import json
+                    response_json = json.loads(response_text)
+                    return {
+                        "answer": response_json.get("answer", "Hello! How can I help you today?"),
+                        "intent": response_json.get("intent", "general"),
+                        "confidence": response_json.get("confidence", 0.95),
+                        "token_usage": result.get("usage"),
+                        "tokens_per_second": result.get("tokens_per_second")
+                    }
+                except:
+                    # Fallback if JSON parsing fails
+                    return {
+                        "answer": "Hello! How can I help you today?",
+                        "intent": "greeting",
+                        "confidence": 0.95
+                    }
+            else:
+                # Fallback response if model can't load
+                return {
+                    "answer": "Hello! How can I help you today?",
+                    "intent": "greeting",
+                    "confidence": 0.95
+                }
+        except Exception as e:
+            logger.error(f"Error handling conversational query: {e}")
+            return {
+                "answer": "Hello! How can I help you today?",
+                "intent": "greeting",
+                "confidence": 0.95
+            }
 
     def _create_enhanced_fallback(self, query: str, all_data: Dict[str, Any], prepared_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
